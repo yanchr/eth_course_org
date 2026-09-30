@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Settings as SettingsIcon } from 'lucide-react'
 import type { Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
@@ -36,6 +36,19 @@ export function AppShell() {
   const rawWeek = rawWeekIndex(semesterStartDate, weekCount)
   const inSemester = rawWeek >= 1 && rawWeek <= weekCount
 
+  const headerRef = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const apply = () => {
+      document.documentElement.style.setProperty('--app-header-h', `${el.getBoundingClientRect().height}px`)
+    }
+    apply()
+    const observer = new ResizeObserver(apply)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
   const [selectedWeek, setSelectedWeek] = useState(todayWeek)
   const [tab, setTab] = useState<MobileTab>('week')
   const [detail, setDetail] = useState<{ id: string; slotId?: string } | null>(null)
@@ -64,7 +77,7 @@ export function AppShell() {
   const carriedOver = open - openThisWeek
 
   const header = (
-    <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-zinc-50/85 backdrop-blur-md">
+    <header ref={headerRef} className="z-30 shrink-0 border-b border-zinc-200/80 bg-zinc-50/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-4 pt-[max(env(safe-area-inset-top),0.75rem)] pb-3 lg:px-8 lg:py-4">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-zinc-900 text-sm font-bold tracking-tight text-white">
           {semesterLabel(semesterStartDate).slice(0, 2)}
@@ -142,7 +155,10 @@ export function AppShell() {
   } else if (isDesktop) {
     content = (
       <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-start gap-6 px-8 py-6 xl:grid-cols-[minmax(0,8fr)_minmax(0,5fr)]">
-        <section aria-labelledby="timetable-heading" className="flex min-w-0 flex-col gap-3">
+        <section
+          aria-labelledby="timetable-heading"
+          className="flex h-[calc(100dvh-var(--app-header-h,8rem)-3rem)] min-h-0 min-w-0 flex-col gap-3 self-start xl:sticky xl:top-0"
+        >
           <PanelHeading id="timetable-heading" title="Timetable" meta={`Week ${week}`} />
           <WeeklyTimetable week={week} isCurrentWeek={inSemester && week === todayWeek} onOpen={openSubject} />
         </section>
@@ -166,7 +182,8 @@ export function AppShell() {
     content = (
       <div
         className={cn(
-          'mx-auto flex flex-col gap-3 px-4 pt-4 pb-28',
+          'mx-auto flex w-full flex-col gap-3 px-4',
+          tab === 'schedule' ? 'min-h-0 flex-1 pt-3' : 'pt-4',
           weekCalendar && tab === 'schedule' ? 'max-w-5xl' : 'max-w-lg',
         )}
       >
@@ -205,10 +222,20 @@ export function AppShell() {
     )
   }
 
+  const scheduleFills = !isDesktop && hasSubjects && tab === 'schedule'
+
   return (
-    <div className="min-h-dvh">
+    <div className="flex h-dvh flex-col">
       {header}
-      <main>{content}</main>
+      <main
+        className={cn(
+          'flex min-h-0 flex-1 flex-col',
+          scheduleFills ? 'overflow-hidden' : 'overflow-y-auto',
+          !isDesktop && hasSubjects && 'pb-[calc(4rem+env(safe-area-inset-bottom))]',
+        )}
+      >
+        {content}
+      </main>
       {!isDesktop && hasSubjects && <BottomNav tab={tab} onChange={setTab} />}
 
       <SubjectDetailDrawer

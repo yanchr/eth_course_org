@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { Check, MapPin } from 'lucide-react'
 import { DAYS, WEEKEND_DAYS, type Day, type Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
@@ -17,9 +17,12 @@ interface WeeklyTimetableProps {
   daysVisible?: 2 | 7
 }
 
-const HOUR_PX = 68
 const DEFAULT_START = 8 * 60
 const DEFAULT_END = 18 * 60
+const VISIBLE_HOURS = (DEFAULT_END - DEFAULT_START) / 60
+const HOUR_PX_MIN = 36
+const HOUR_PX_MAX = 56
+const HEADER_H = 48
 const GUTTER = '3.25rem'
 const PEEK = 2
 
@@ -38,23 +41,47 @@ function useMinutesNow(enabled: boolean): number | null {
   return enabled ? now : null
 }
 
+/** Hour height that keeps 08:00–18:00 inside the timetable viewport. */
+function useFitHourPx(ref: RefObject<HTMLDivElement | null>, reservedPx: number): number {
+  const [px, setPx] = useState(48)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const measure = () => {
+      const available = el.clientHeight - reservedPx
+      if (available <= 0) return
+      const next = Math.min(HOUR_PX_MAX, Math.max(HOUR_PX_MIN, Math.floor(available / VISIBLE_HOURS)))
+      setPx((prev) => (prev === next ? prev : next))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [ref, reservedPx])
+  return px
+}
+
 export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }: WeeklyTimetableProps) {
   const { subjects, settings } = usePlanner()
   const today = isCurrentWeek ? todayDay() : null
   const now = useMinutesNow(isCurrentWeek)
   const pager = daysVisible === 2
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const headerScrollRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const verticalRef = useRef<HTMLDivElement>(null)
+  const hourPx = useFitHourPx(frameRef, HEADER_H)
 
   const weekSubjects = subjects.filter((s) => occursInWeek(s, week))
   const ranges = weekSubjects.flatMap((s) => s.scheduleSlots.map((slot) => parseTimeRange(slot.time))).filter((r) => r !== null)
   const startMin = Math.floor(Math.min(DEFAULT_START, ...ranges.map((r) => r.start)) / 60) * 60
   const endMin = Math.ceil(Math.max(DEFAULT_END, ...ranges.map((r) => r.end)) / 60) * 60
   const hours = Array.from({ length: (endMin - startMin) / 60 }, (_, i) => startMin + i * 60)
-  const height = ((endMin - startMin) / 60) * HOUR_PX
+  const height = ((endMin - startMin) / 60) * hourPx
   const unscheduled = weekSubjects.flatMap((subject) =>
     subject.scheduleSlots.filter((slot) => !parseTimeRange(slot.time)).map((slot) => ({ subject, slot })),
   )
-  const nowTop = now !== null ? ((now - startMin) / 60) * HOUR_PX : null
+  const nowTop = now !== null ? ((now - startMin) / 60) * hourPx : null
   const showNow = nowTop !== null && now !== null && now >= startMin && now <= endMin
 
   const startIndex = (() => {
@@ -62,12 +89,29 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     return Math.max(0, idx)
   })()
 
+  const syncHeader = () => {
+    const body = scrollerRef.current
+    const head = headerScrollRef.current
+    if (!body || !head || head.scrollLeft === body.scrollLeft) return
+    head.scrollLeft = body.scrollLeft
+  }
+
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (!pager || !el) return
     const dayW = el.clientWidth / PEEK
     el.scrollLeft = startIndex * dayW
+    syncHeader()
   }, [pager, week, startIndex])
+
+  useLayoutEffect(() => {
+    const el = verticalRef.current
+    const frame = frameRef.current
+    if (!el || !frame || frame.clientHeight === 0) return
+    const allDayH = el.querySelector<HTMLElement>('[data-all-day]')?.offsetHeight ?? 0
+    const offset = Math.max(0, (DEFAULT_START - startMin) / 60) * hourPx
+    el.scrollTop = allDayH + offset
+  }, [week, pager, startMin, hourPx])
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!pager) return
@@ -89,7 +133,6 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     }
   }
 
-  const headerH = 64
   const allDay = unscheduled.length > 0
 
   const dayColumns = DAYS.map((day) => (
@@ -98,10 +141,10 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
       day={day}
       week={week}
       today={today}
-      date={dateForDay(settings.semesterStartDate, week, day)}
       hours={hours}
       startMin={startMin}
       height={height}
+      hourPx={hourPx}
       subjects={subjects}
       unscheduled={unscheduled}
       nowTop={day === today && showNow ? nowTop : null}
@@ -110,52 +153,69 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     />
   ))
 
+  const pagerTrack = {
+    width: `${((DAYS.length + 1) / PEEK) * 100}%`,
+    gridTemplateColumns: `repeat(${DAYS.length + 1}, minmax(0, 1fr))`,
+  }
+
   if (pager) {
     return (
-      <div
-        className="flex flex-col gap-2"
-        onKeyDown={onKeyDown}
-      >
-        <p className="px-1 text-xs text-zinc-500">Swipe to see other days</p>
-        <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
-          <div className="flex">
-            <div className="w-[3.25rem] shrink-0 border-r border-zinc-100 bg-white">
-              <div style={{ height: headerH }} />
-              {allDay && (
-                <div className="flex h-10 items-center justify-end px-1.5 text-[9px] font-medium tracking-wide text-zinc-400 uppercase">
-                  All day
-                </div>
-              )}
-              <div className="relative" style={{ height }}>
-                {hours.map((h, i) =>
-                  i === 0 ? null : (
-                    <span
-                      key={h}
-                      className="tabular absolute right-1.5 -translate-y-1/2 text-[10px] text-zinc-400"
-                      style={{ top: i * HOUR_PX }}
-                    >
-                      {formatMinutes(h)}
-                    </span>
-                  ),
-                )}
+      <div className="flex min-h-0 flex-1 flex-col gap-2" onKeyDown={onKeyDown}>
+        <p className="shrink-0 px-1 text-xs text-zinc-500">Swipe to see other days</p>
+        <div ref={frameRef} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
+          <div className="flex shrink-0 border-b border-zinc-100">
+            <div className="shrink-0 border-r border-zinc-100 bg-white" style={{ width: GUTTER }} />
+            <div ref={headerScrollRef} className="scrollbar-none min-w-0 flex-1 overflow-hidden">
+              <div className="grid" style={pagerTrack}>
+                {DAYS.map((day) => (
+                  <DayHeader
+                    key={day}
+                    day={day}
+                    today={today}
+                    date={dateForDay(settings.semesterStartDate, week, day)}
+                  />
+                ))}
+                <div aria-hidden="true" className="border-l border-zinc-100 bg-zinc-50" />
               </div>
             </div>
-            <div
-              ref={scrollerRef}
-              tabIndex={0}
-              role="region"
-              aria-label="Week schedule, two days at a time. Swipe or use arrow keys for other days."
-              className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain outline-none"
-            >
+          </div>
+          <div ref={verticalRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="flex">
+              <div className="shrink-0 border-r border-zinc-100 bg-white" style={{ width: GUTTER }}>
+                {allDay && (
+                  <div
+                    data-all-day
+                    className="flex h-10 items-center justify-end px-1.5 text-[9px] font-medium tracking-wide text-zinc-400 uppercase"
+                  >
+                    All day
+                  </div>
+                )}
+                <div className="relative" style={{ height }}>
+                  {hours.map((h, i) =>
+                    i === 0 ? null : (
+                      <span
+                        key={h}
+                        className="tabular absolute right-1.5 -translate-y-1/2 text-[10px] text-zinc-400"
+                        style={{ top: i * hourPx }}
+                      >
+                        {formatMinutes(h)}
+                      </span>
+                    ),
+                  )}
+                </div>
+              </div>
               <div
-                className="grid"
-                style={{
-                  width: `${((DAYS.length + 1) / PEEK) * 100}%`,
-                  gridTemplateColumns: `repeat(${DAYS.length + 1}, minmax(0, 1fr))`,
-                }}
+                ref={scrollerRef}
+                tabIndex={0}
+                role="region"
+                aria-label="Week schedule, two days at a time. Swipe or use arrow keys for other days."
+                onScroll={syncHeader}
+                className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain outline-none"
               >
-                {dayColumns}
-                <div aria-hidden="true" className="snap-start border-l border-zinc-100 bg-zinc-50/40" />
+                <div className="grid" style={pagerTrack}>
+                  {dayColumns}
+                  <div aria-hidden="true" className="snap-start border-l border-zinc-100 bg-zinc-50/40" />
+                </div>
               </div>
             </div>
           </div>
@@ -167,11 +227,14 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
   const columns = { gridTemplateColumns: `${GUTTER} repeat(7, minmax(0, 1fr))` }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="overflow-x-auto overscroll-x-contain rounded-2xl border border-zinc-200 bg-white shadow-xs">
+    <div ref={frameRef} className="flex min-h-0 flex-1 flex-col">
+      <div
+        ref={verticalRef}
+        className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-zinc-200 bg-white shadow-xs"
+      >
         <div className="min-w-[44rem]">
-          <div className="grid" style={columns}>
-            <div className="sticky left-0 z-10 bg-white" />
+          <div className="sticky top-0 z-20 grid bg-white" style={columns}>
+            <div className="sticky left-0 z-30 bg-white" />
             {DAYS.map((day) => (
               <DayHeader
                 key={day}
@@ -182,7 +245,7 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
             ))}
           </div>
           {allDay && (
-            <div className="grid border-t border-zinc-200" style={columns}>
+            <div data-all-day className="grid border-t border-zinc-200" style={columns}>
               <div className="sticky left-0 z-10 flex items-center justify-end bg-white px-2 py-2 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
                 All day
               </div>
@@ -204,7 +267,7 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
                   <span
                     key={h}
                     className="tabular absolute right-2 -translate-y-1/2 text-[11px] text-zinc-400"
-                    style={{ top: i * HOUR_PX }}
+                    style={{ top: i * hourPx }}
                   >
                     {formatMinutes(h)}
                   </span>
@@ -219,6 +282,7 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
                 today={today}
                 hours={hours}
                 startMin={startMin}
+                hourPx={hourPx}
                 height={height}
                 subjects={subjects}
                 nowTop={day === today && showNow ? nowTop : null}
@@ -236,9 +300,9 @@ function DayPane({
   day,
   week,
   today,
-  date,
   hours,
   startMin,
+  hourPx,
   height,
   subjects,
   unscheduled,
@@ -249,9 +313,9 @@ function DayPane({
   day: Day
   week: number
   today: Day | null
-  date: Date
   hours: number[]
   startMin: number
+  hourPx: number
   height: number
   subjects: Subject[]
   unscheduled: { subject: Subject; slot: Subject['scheduleSlots'][number] }[]
@@ -261,7 +325,6 @@ function DayPane({
 }) {
   return (
     <div className={cn('flex min-w-0 flex-col', snap && 'snap-start')}>
-      <DayHeader day={day} today={today} date={date} />
       {unscheduled.length > 0 && (
         <AllDayLane
           day={day}
@@ -276,6 +339,7 @@ function DayPane({
         today={today}
         hours={hours}
         startMin={startMin}
+        hourPx={hourPx}
         height={height}
         subjects={subjects}
         nowTop={nowTop}
@@ -290,14 +354,14 @@ function DayHeader({ day, today, date }: { day: Day; today: Day | null; date: Da
   return (
     <div
       className={cn(
-        'flex h-16 flex-col items-center justify-center gap-0.5 border-l border-zinc-100',
-        WEEKEND_DAYS.includes(day) && 'bg-zinc-50/80',
+        'flex h-12 flex-col items-center justify-center gap-0.5 border-l border-zinc-100',
+        WEEKEND_DAYS.includes(day) ? 'bg-zinc-50' : 'bg-white',
         isToday && 'bg-zinc-50',
       )}
     >
       <span
         className={cn(
-          'text-[11px] font-medium tracking-wide uppercase',
+          'text-[10px] font-medium tracking-wide uppercase',
           isToday ? 'text-zinc-900' : 'text-zinc-400',
         )}
       >
@@ -305,7 +369,7 @@ function DayHeader({ day, today, date }: { day: Day; today: Day | null; date: Da
       </span>
       <span
         className={cn(
-          'tabular inline-flex size-8 items-center justify-center rounded-full text-sm font-semibold',
+          'tabular inline-flex size-6 items-center justify-center rounded-full text-[13px] font-semibold',
           isToday ? 'bg-zinc-900 text-white' : 'text-zinc-700',
         )}
       >
@@ -359,6 +423,7 @@ function DayBody({
   today,
   hours,
   startMin,
+  hourPx,
   height,
   subjects,
   nowTop,
@@ -369,6 +434,7 @@ function DayBody({
   today: Day | null
   hours: number[]
   startMin: number
+  hourPx: number
   height: number
   subjects: Subject[]
   nowTop: number | null
@@ -385,7 +451,7 @@ function DayBody({
     >
       {hours.map((h, i) =>
         i === 0 ? null : (
-          <div key={h} className="absolute inset-x-0 border-t border-zinc-100" style={{ top: i * HOUR_PX }} />
+          <div key={h} className="absolute inset-x-0 border-t border-zinc-100" style={{ top: i * hourPx }} />
         ),
       )}
       {hours.map((h, i) =>
@@ -393,14 +459,14 @@ function DayBody({
           <div
             key={`${h}-half`}
             className="absolute inset-x-0 border-t border-dashed border-zinc-100/80"
-            style={{ top: i * HOUR_PX - HOUR_PX / 2 }}
+            style={{ top: i * hourPx - hourPx / 2 }}
           />
         ),
       )}
       {layoutDaySlots(slotsForDay(subjects, day, week)).map((event) => {
         const { subject, slot, start, end, lane, lanes } = event
-        const top = ((start - startMin) / 60) * HOUR_PX
-        const blockHeight = Math.max(((end - start) / 60) * HOUR_PX - 2, 28)
+        const top = ((start - startMin) / 60) * hourPx
+        const blockHeight = Math.max(((end - start) / 60) * hourPx - 2, 26)
         const calendar = isCalendar(subject)
         const category = categoryForSlot(subject, slot.type)
         const state = !calendar && category ? getProgress(subject, week, category) : 'pending'
@@ -514,13 +580,13 @@ function EventFace({
         {done && <Check className="size-3 shrink-0" strokeWidth={3} />}
         <span className="truncate">{name}</span>
       </span>
-      {height >= 40 && (
+      {height >= 32 && (
         <span className="truncate px-1.5 text-[10px] leading-tight opacity-60">
           {time}
-          {height >= 56 && type ? ` · ${type}` : ''}
+          {height >= 48 && type ? ` · ${type}` : ''}
         </span>
       )}
-      {height >= 72 && room && (
+      {height >= 64 && room && (
         <span className="mt-auto flex items-center gap-1 truncate px-1.5 pb-1 text-[10px] font-medium opacity-75">
           <MapPin className="size-3 shrink-0" />
           <span className="truncate">{room}</span>
