@@ -2,10 +2,12 @@ import { ChevronRight, MapPin } from 'lucide-react'
 import type { Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { getProgress, isWeekDone, weekStats } from '../lib/progress'
+import { isOnce } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { SLOT_LABEL, sortSlots } from '../lib/schedule'
 import { CampusBadge } from './CampusBadge'
 import { ProgressCell } from './ProgressCell'
+import { cn } from '../lib/cn'
 
 interface SubjectCardProps {
   subject: Subject
@@ -32,7 +34,11 @@ export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
       >
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-base font-semibold tracking-tight text-zinc-900">{subject.name}</h3>
-          {subject.lecturer && <p className="truncate text-sm text-zinc-500">{subject.lecturer}</p>}
+          {subject.lecturer ? (
+            <p className="truncate text-sm text-zinc-500">{subject.lecturer}</p>
+          ) : isOnce(subject) ? (
+            <p className="truncate text-sm text-zinc-500">Once · week {subject.onceWeek}</p>
+          ) : null}
         </div>
         <span
           className={`tabular rounded-full px-2.5 py-1 text-xs font-semibold transition-colors duration-150 ease-out ${
@@ -44,7 +50,12 @@ export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
         <ChevronRight className="size-4 text-zinc-300" aria-hidden="true" />
       </button>
 
-      <div className="grid grid-cols-3 gap-2 px-4 pb-4">
+      <div
+        className={cn(
+          'grid gap-2 px-4 pb-4',
+          subject.categories.length <= 1 ? 'grid-cols-1' : subject.categories.length === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        )}
+      >
         {subject.categories.map((category) => (
           <ProgressCell
             key={category}
@@ -70,7 +81,7 @@ export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
                 >
                   <span className="flex w-16 shrink-0 flex-col leading-tight">
                     <span className="text-xs font-semibold text-zinc-900">{slot.day}</span>
-                    <span className="text-[11px] text-zinc-400">{SLOT_LABEL[slot.type]}</span>
+                    <span className="text-[11px] text-zinc-400">{isOnce(subject) ? 'Once' : SLOT_LABEL[slot.type]}</span>
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col leading-tight">
                     <span className="tabular truncate text-zinc-700">{slot.time || '—'}</span>

@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Clock, ExternalLink, Link2, MapPin, Pencil, User } from 'lucide-react'
+import { CalendarDays, Clock, ExternalLink, Link2, MapPin, Pencil, User } from 'lucide-react'
 import type { Subject } from '../types'
 import { parseRoom } from '../lib/campus'
 import { DAY_LABEL, SLOT_LABEL, sortSlots } from '../lib/schedule'
+import { isCalendar, isOnce } from '../lib/subjects'
 import { cn } from '../lib/cn'
 import { Sheet } from './ui/Sheet'
 import { Button } from './ui/Button'
@@ -23,12 +24,22 @@ export function SubjectDetailDrawer({ subject, initialSlotId, onClose, onEdit }:
       onClose={onClose}
       width="lg"
       title={subject?.name ?? ''}
-      subtitle={subject?.lecturer || undefined}
+      subtitle={
+        subject
+          ? isCalendar(subject)
+            ? isOnce(subject)
+              ? `Calendar · week ${subject.onceWeek}`
+              : 'Calendar · every week'
+            : isOnce(subject)
+              ? `Once · week ${subject.onceWeek}`
+              : subject.lecturer || undefined
+          : undefined
+      }
       footer={
         subject && (
           <div className="flex justify-end">
             <Button variant="primary" icon={<Pencil className="size-4" />} onClick={() => onEdit(subject)}>
-              Edit subject
+              {isCalendar(subject) ? 'Edit calendar item' : isOnce(subject) ? 'Edit event' : 'Edit subject'}
             </Button>
           </div>
         )
@@ -49,13 +60,38 @@ function DetailBody({ subject, initialSlotId }: { subject: Subject; initialSlotI
 
   return (
     <div className="flex flex-col gap-6">
+      {subject.onceWeek != null && (
+        <section className="flex items-center gap-3 text-sm">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-zinc-100">
+            <CalendarDays className="size-4 text-zinc-600" />
+          </span>
+          <div>
+            <div className="text-xs text-zinc-400">When</div>
+            <div className="font-medium text-zinc-900">
+              {isCalendar(subject) ? `Week ${subject.onceWeek} · calendar only` : `Week ${subject.onceWeek} only`}
+            </div>
+          </div>
+        </section>
+      )}
+      {isCalendar(subject) && subject.onceWeek == null && (
+        <section className="flex items-center gap-3 text-sm">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-calendar">
+            <CalendarDays className="size-4 text-calendar-ink" />
+          </span>
+          <div>
+            <div className="text-xs text-zinc-400">When</div>
+            <div className="font-medium text-zinc-900">Every week · calendar only</div>
+          </div>
+        </section>
+      )}
+
       {subject.lecturer && (
         <section className="flex items-center gap-3 text-sm">
           <span className="flex size-9 items-center justify-center rounded-xl bg-zinc-100">
             <User className="size-4 text-zinc-600" />
           </span>
           <div>
-            <div className="text-xs text-zinc-400">Lecturer</div>
+            <div className="text-xs text-zinc-400">{isCalendar(subject) ? 'Note' : 'Lecturer'}</div>
             <div className="font-medium text-zinc-900">{subject.lecturer}</div>
           </div>
         </section>
@@ -85,8 +121,10 @@ function DetailBody({ subject, initialSlotId }: { subject: Subject; initialSlotI
                   >
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-semibold text-zinc-900">
-                        {SLOT_LABEL[slot.type]}
-                        <span className="ml-2 font-normal text-zinc-500">{DAY_LABEL[slot.day]}</span>
+                        {isCalendar(subject) || isOnce(subject) ? DAY_LABEL[slot.day] : SLOT_LABEL[slot.type]}
+                        {!isCalendar(subject) && !isOnce(subject) && (
+                          <span className="ml-2 font-normal text-zinc-500">{DAY_LABEL[slot.day]}</span>
+                        )}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
                         <span className="tabular flex items-center gap-1">

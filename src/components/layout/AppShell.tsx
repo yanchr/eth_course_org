@@ -1,22 +1,22 @@
 import { useMemo, useState } from 'react'
 import { Plus, Settings as SettingsIcon } from 'lucide-react'
-import type { Day, Subject } from '../../types'
+import type { Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
-import { useIsDesktop } from '../../hooks/useMediaQuery'
-import { currentWeek, formatWeekRange, parseISODate, rawWeekIndex, todayDay } from '../../lib/semester'
+import { useFitsWeekCalendar, useIsDesktop } from '../../hooks/useMediaQuery'
+import { currentWeek, formatWeekRange, parseISODate, rawWeekIndex } from '../../lib/semester'
 import { sortByWeekOutstanding, weekCompletions } from '../../lib/progress'
+import { cn } from '../../lib/cn'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
 import { WeekPicker } from '../WeekPicker'
 import { ProgressGrid } from '../ProgressGrid'
 import { WeeklyTimetable } from '../WeeklyTimetable'
 import { SubjectCard } from '../SubjectCard'
-import { DayAgenda } from '../DayAgenda'
 import { SubjectList } from '../SubjectList'
 import { EmptyState } from '../EmptyState'
 import { QuickAddSubjects } from '../QuickAddSubjects'
 import { SubjectDetailDrawer } from '../SubjectDetailDrawer'
-import { SubjectEditor } from '../SubjectEditor'
+import { SubjectEditor, type EditorTarget } from '../SubjectEditor'
 import { SettingsDrawer } from '../SettingsDrawer'
 import { BottomNav, type MobileTab } from './BottomNav'
 
@@ -29,6 +29,7 @@ function semesterLabel(startDate: string): string {
 export function AppShell() {
   const { subjects, settings, upsertSubject, deleteSubject } = usePlanner()
   const isDesktop = useIsDesktop()
+  const weekCalendar = useFitsWeekCalendar()
   const { semesterStartDate, weekCount } = settings
 
   const todayWeek = currentWeek(semesterStartDate, weekCount)
@@ -37,9 +38,8 @@ export function AppShell() {
 
   const [selectedWeek, setSelectedWeek] = useState(todayWeek)
   const [tab, setTab] = useState<MobileTab>('week')
-  const [day, setDay] = useState<Day>(todayDay())
   const [detail, setDetail] = useState<{ id: string; slotId?: string } | null>(null)
-  const [editing, setEditing] = useState<Subject | 'new' | null>(null)
+  const [editing, setEditing] = useState<EditorTarget | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const week = Math.min(selectedWeek, weekCount)
@@ -55,6 +55,14 @@ export function AppShell() {
       ? 'Semester not started'
       : 'Semester ended'
 
+  /** Everything due by the end of the current week, leftovers from earlier weeks included. */
+  const dueThroughWeek = inSemester ? todayWeek : rawWeek < 1 ? 0 : weekCount
+  const open = completion
+    .slice(0, dueThroughWeek)
+    .reduce((sum, w) => sum + w.scheduled - w.completed, 0)
+  const openThisWeek = dueThroughWeek > 0 ? completion[dueThroughWeek - 1].scheduled - completion[dueThroughWeek - 1].completed : 0
+  const carriedOver = open - openThisWeek
+
   const header = (
     <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-zinc-50/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-4 pt-[max(env(safe-area-inset-top),0.75rem)] pb-3 lg:px-8 lg:py-4">
@@ -69,10 +77,39 @@ export function AppShell() {
             {status} · W{week}: {formatWeekRange(semesterStartDate, week)}
           </p>
         </div>
+        {hasSubjects && dueThroughWeek > 0 && (
+          <span
+            className={cn(
+              'tabular shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold',
+              'transition-colors duration-150 ease-out',
+              open > 0 ? 'bg-zinc-100 text-zinc-700' : 'bg-emerald-500/10 text-emerald-700',
+            )}
+            aria-label={
+              open > 0
+                ? `${open} item${open === 1 ? '' : 's'} still to do by the end of week ${dueThroughWeek}`
+                : `Nothing left to do through week ${dueThroughWeek}`
+            }
+            title={
+              carriedOver > 0
+                ? `${openThisWeek} open this week · ${carriedOver} from earlier weeks`
+                : `${openThisWeek} open this week`
+            }
+          >
+            {open > 0 ? `${open} to do` : 'All done'}
+          </span>
+        )}
         {isDesktop && hasSubjects && (
-          <Button variant="primary" size="sm" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>
-            Add subject
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setEditing('calendar')}>
+              Calendar
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEditing('event')}>
+              Add event
+            </Button>
+            <Button variant="primary" size="sm" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>
+              Add subject
+            </Button>
+          </>
         )}
         <IconButton label="Settings" onClick={() => setSettingsOpen(true)}>
           <SettingsIcon className="size-5" />
@@ -95,10 +132,16 @@ export function AppShell() {
 
   let content
   if (!hasSubjects) {
-    content = <EmptyState onAdd={() => setEditing('new')} />
+    content = (
+      <EmptyState
+        onAdd={() => setEditing('new')}
+        onAddEvent={() => setEditing('event')}
+        onAddCalendar={() => setEditing('calendar')}
+      />
+    )
   } else if (isDesktop) {
     content = (
-      <div className="mx-auto grid max-w-[1600px] grid-cols-[minmax(0,5fr)_minmax(0,7fr)] items-start gap-6 px-8 py-6">
+      <div className="mx-auto grid max-w-[1600px] grid-cols-1 items-start gap-6 px-8 py-6 xl:grid-cols-[minmax(0,8fr)_minmax(0,5fr)]">
         <section aria-labelledby="timetable-heading" className="flex min-w-0 flex-col gap-3">
           <PanelHeading id="timetable-heading" title="Timetable" meta={`Week ${week}`} />
           <WeeklyTimetable week={week} isCurrentWeek={inSemester && week === todayWeek} onOpen={openSubject} />
@@ -121,22 +164,41 @@ export function AppShell() {
     )
   } else {
     content = (
-      <div className="mx-auto flex max-w-lg flex-col gap-3 px-4 pt-4 pb-28">
+      <div
+        className={cn(
+          'mx-auto flex flex-col gap-3 px-4 pt-4 pb-28',
+          weekCalendar && tab === 'schedule' ? 'max-w-5xl' : 'max-w-lg',
+        )}
+      >
         {tab === 'week' && (
           <>
             <p className="px-1 text-xs text-zinc-500">Tap to mark done · long-press for no class</p>
+            {weekOrder.length === 0 && (
+              <p className="rounded-2xl border border-dashed border-zinc-200 px-6 py-10 text-center text-sm text-zinc-400">
+                Nothing this week.
+              </p>
+            )}
             {weekOrder.map((s) => (
               <SubjectCard key={s.id} subject={s} week={week} onOpen={openSubject} />
             ))}
             <QuickAddSubjects collapsible onOpenDetailed={() => setEditing('new')} />
           </>
         )}
-        {tab === 'schedule' && <DayAgenda week={week} day={day} onDayChange={setDay} onOpen={openSubject} />}
+        {tab === 'schedule' && (
+          <WeeklyTimetable
+            week={week}
+            isCurrentWeek={inSemester && week === todayWeek}
+            onOpen={openSubject}
+            daysVisible={weekCalendar ? 7 : 2}
+          />
+        )}
         {tab === 'subjects' && (
           <SubjectList
             todayWeek={inSemester ? todayWeek : Math.max(0, Math.min(rawWeek, weekCount))}
             onOpen={(s) => openSubject(s)}
             onAdd={() => setEditing('new')}
+            onAddEvent={() => setEditing('event')}
+            onAddCalendar={() => setEditing('calendar')}
           />
         )}
       </div>
@@ -160,6 +222,7 @@ export function AppShell() {
       />
       <SubjectEditor
         subject={editing}
+        defaultWeek={week}
         onClose={() => setEditing(null)}
         onSave={(s) => {
           upsertSubject(s)

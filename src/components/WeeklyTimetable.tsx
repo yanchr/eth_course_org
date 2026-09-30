@@ -1,9 +1,11 @@
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Check, MapPin } from 'lucide-react'
-import type { Subject } from '../types'
+import { DAYS, WEEKEND_DAYS, type Day, type Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
-import { dateForDay, formatDayDate, parseTimeRange, todayDay } from '../lib/semester'
-import { categoryForSlot, formatMinutes, SLOT_LABEL, slotsForDay, timetableDays } from '../lib/schedule'
-import { getProgress } from '../lib/progress'
+import { dateForDay, formatMinutes, parseTimeRange, todayDay } from '../lib/semester'
+import { categoryForSlot, DAY_LABEL, layoutDaySlots, SLOT_LABEL, slotsForDay } from '../lib/schedule'
+import { getProgress, isWeekDone, weekStats } from '../lib/progress'
+import { isCalendar, isOnce, occursInWeek } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { cn } from '../lib/cn'
 
@@ -11,136 +13,520 @@ interface WeeklyTimetableProps {
   week: number
   isCurrentWeek: boolean
   onOpen: (subject: Subject, slotId?: string) => void
+  /** 2 = phone pager (today + tomorrow, swipe). 7 = full week. */
+  daysVisible?: 2 | 7
 }
 
-const HOUR_PX = 52
+const HOUR_PX = 68
 const DEFAULT_START = 8 * 60
 const DEFAULT_END = 18 * 60
+const GUTTER = '3.25rem'
+const PEEK = 2
 
-export function WeeklyTimetable({ week, isCurrentWeek, onOpen }: WeeklyTimetableProps) {
+const minutesNow = () => {
+  const d = new Date()
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+function useMinutesNow(enabled: boolean): number | null {
+  const [now, setNow] = useState(minutesNow)
+  useEffect(() => {
+    if (!enabled) return
+    const id = window.setInterval(() => setNow(minutesNow()), 60_000)
+    return () => window.clearInterval(id)
+  }, [enabled])
+  return enabled ? now : null
+}
+
+export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }: WeeklyTimetableProps) {
   const { subjects, settings } = usePlanner()
   const today = isCurrentWeek ? todayDay() : null
-  const days = timetableDays(subjects)
-  const columns = { gridTemplateColumns: `3rem repeat(${days.length}, minmax(0, 1fr))` }
+  const now = useMinutesNow(isCurrentWeek)
+  const pager = daysVisible === 2
+  const scrollerRef = useRef<HTMLDivElement>(null)
 
-  const ranges = subjects.flatMap((s) => s.scheduleSlots.map((slot) => parseTimeRange(slot.time))).filter((r) => r !== null)
+  const weekSubjects = subjects.filter((s) => occursInWeek(s, week))
+  const ranges = weekSubjects.flatMap((s) => s.scheduleSlots.map((slot) => parseTimeRange(slot.time))).filter((r) => r !== null)
   const startMin = Math.floor(Math.min(DEFAULT_START, ...ranges.map((r) => r.start)) / 60) * 60
   const endMin = Math.ceil(Math.max(DEFAULT_END, ...ranges.map((r) => r.end)) / 60) * 60
   const hours = Array.from({ length: (endMin - startMin) / 60 }, (_, i) => startMin + i * 60)
   const height = ((endMin - startMin) / 60) * HOUR_PX
-  const unscheduled = subjects.flatMap((subject) =>
+  const unscheduled = weekSubjects.flatMap((subject) =>
     subject.scheduleSlots.filter((slot) => !parseTimeRange(slot.time)).map((slot) => ({ subject, slot })),
   )
+  const nowTop = now !== null ? ((now - startMin) / 60) * HOUR_PX : null
+  const showNow = nowTop !== null && now !== null && now >= startMin && now <= endMin
+
+  const startIndex = (() => {
+    const idx = today ? DAYS.indexOf(today) : 0
+    return Math.max(0, idx)
+  })()
+
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!pager || !el) return
+    const dayW = el.clientWidth / PEEK
+    el.scrollLeft = startIndex * dayW
+  }, [pager, week, startIndex])
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!pager) return
+    const el = scrollerRef.current
+    if (!el) return
+    const dayW = el.clientWidth / PEEK
+    if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      el.scrollBy({ left: dayW, behavior: 'smooth' })
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      el.scrollBy({ left: -dayW, behavior: 'smooth' })
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      el.scrollTo({ left: 0, behavior: 'smooth' })
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+    }
+  }
+
+  const headerH = 64
+  const allDay = unscheduled.length > 0
+
+  const dayColumns = DAYS.map((day) => (
+    <DayPane
+      key={day}
+      day={day}
+      week={week}
+      today={today}
+      date={dateForDay(settings.semesterStartDate, week, day)}
+      hours={hours}
+      startMin={startMin}
+      height={height}
+      subjects={subjects}
+      unscheduled={unscheduled}
+      nowTop={day === today && showNow ? nowTop : null}
+      snap={pager}
+      onOpen={onOpen}
+    />
+  ))
+
+  if (pager) {
+    return (
+      <div
+        className="flex flex-col gap-2"
+        onKeyDown={onKeyDown}
+      >
+        <p className="px-1 text-xs text-zinc-500">Swipe to see other days</p>
+        <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
+          <div className="flex">
+            <div className="w-[3.25rem] shrink-0 border-r border-zinc-100 bg-white">
+              <div style={{ height: headerH }} />
+              {allDay && (
+                <div className="flex h-10 items-center justify-end px-1.5 text-[9px] font-medium tracking-wide text-zinc-400 uppercase">
+                  All day
+                </div>
+              )}
+              <div className="relative" style={{ height }}>
+                {hours.map((h, i) =>
+                  i === 0 ? null : (
+                    <span
+                      key={h}
+                      className="tabular absolute right-1.5 -translate-y-1/2 text-[10px] text-zinc-400"
+                      style={{ top: i * HOUR_PX }}
+                    >
+                      {formatMinutes(h)}
+                    </span>
+                  ),
+                )}
+              </div>
+            </div>
+            <div
+              ref={scrollerRef}
+              tabIndex={0}
+              role="region"
+              aria-label="Week schedule, two days at a time. Swipe or use arrow keys for other days."
+              className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain outline-none"
+            >
+              <div
+                className="grid"
+                style={{
+                  width: `${((DAYS.length + 1) / PEEK) * 100}%`,
+                  gridTemplateColumns: `repeat(${DAYS.length + 1}, minmax(0, 1fr))`,
+                }}
+              >
+                {dayColumns}
+                <div aria-hidden="true" className="snap-start border-l border-zinc-100 bg-zinc-50/40" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const columns = { gridTemplateColumns: `${GUTTER} repeat(7, minmax(0, 1fr))` }
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
-        <div className="grid border-b border-zinc-200" style={columns}>
-          <div />
-          {days.map((day) => {
-            const isToday = day === today
-            return (
-              <div key={day} className="border-l border-zinc-100 px-2 py-2.5 text-center">
-                <div className={cn('text-xs font-semibold', isToday ? 'text-zinc-900' : 'text-zinc-500')}>{day}</div>
-                <div
-                  className={cn(
-                    'tabular mx-auto mt-0.5 inline-flex rounded-md px-1.5 text-[11px]',
-                    isToday ? 'bg-zinc-900 text-white' : 'text-zinc-400',
-                  )}
-                >
-                  {formatDayDate(dateForDay(settings.semesterStartDate, week, day))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="relative grid" style={{ ...columns, height }}>
-          <div className="relative">
-            {hours.map((h, i) => (
-              <span
-                key={h}
-                className="tabular absolute right-2 -translate-y-1/2 text-[10px] text-zinc-400"
-                style={{ top: i * HOUR_PX }}
-              >
-                {i === 0 ? '' : formatMinutes(h)}
-              </span>
+      <div className="overflow-x-auto overscroll-x-contain rounded-2xl border border-zinc-200 bg-white shadow-xs">
+        <div className="min-w-[44rem]">
+          <div className="grid" style={columns}>
+            <div className="sticky left-0 z-10 bg-white" />
+            {DAYS.map((day) => (
+              <DayHeader
+                key={day}
+                day={day}
+                today={today}
+                date={dateForDay(settings.semesterStartDate, week, day)}
+              />
             ))}
           </div>
-          {days.map((day) => (
-            <div key={day} className={cn('relative border-l border-zinc-100', day === today && 'bg-zinc-50')}>
+          {allDay && (
+            <div className="grid border-t border-zinc-200" style={columns}>
+              <div className="sticky left-0 z-10 flex items-center justify-end bg-white px-2 py-2 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
+                All day
+              </div>
+              {DAYS.map((day) => (
+                <AllDayLane
+                  key={day}
+                  day={day}
+                  today={today}
+                  items={unscheduled.filter(({ slot }) => slot.day === day)}
+                  onOpen={onOpen}
+                />
+              ))}
+            </div>
+          )}
+          <div className="relative grid border-t border-zinc-200" style={{ ...columns, height }}>
+            <div className="relative sticky left-0 z-10 bg-white">
               {hours.map((h, i) =>
                 i === 0 ? null : (
-                  <div key={h} className="absolute inset-x-0 border-t border-zinc-100" style={{ top: i * HOUR_PX }} />
+                  <span
+                    key={h}
+                    className="tabular absolute right-2 -translate-y-1/2 text-[11px] text-zinc-400"
+                    style={{ top: i * HOUR_PX }}
+                  >
+                    {formatMinutes(h)}
+                  </span>
                 ),
               )}
-              {slotsForDay(subjects, day).map(({ subject, slot }) => {
-                const range = parseTimeRange(slot.time)
-                if (!range) return null
-                const top = ((range.start - startMin) / 60) * HOUR_PX
-                const blockHeight = ((range.end - range.start) / 60) * HOUR_PX
-                const category = categoryForSlot(subject, slot.type)
-                const state = category ? getProgress(subject, week, category) : 'pending'
-                const loc = parseRoom(slot.room)
-                return (
-                  <button
-                    key={slot.id}
-                    type="button"
-                    onClick={() => onOpen(subject, slot.id)}
-                    aria-label={`${subject.name} ${SLOT_LABEL[slot.type]}, ${day} ${slot.time}${slot.room ? `, ${slot.room}` : ''}${state !== 'pending' ? `, ${state}` : ''}`}
-                    className={cn(
-                      'absolute inset-x-1 flex flex-col overflow-hidden rounded-lg border px-2 py-1.5 text-left',
-                      'transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:shadow-md',
-                      state === 'completed'
-                        ? 'border-zinc-900 bg-zinc-900 text-white'
-                        : state === 'canceled'
-                          ? 'border-dashed border-zinc-300 bg-zinc-50 text-zinc-400'
-                          : slot.type === 'lecture'
-                            ? 'border-zinc-300 bg-white text-zinc-900'
-                            : 'border-zinc-200 bg-zinc-100 text-zinc-900',
-                    )}
-                    style={{ top: top + 1, height: Math.max(blockHeight - 2, 26) }}
-                  >
-                    <span
-                      className={cn(
-                        'flex items-center gap-1 truncate text-xs font-semibold',
-                        state === 'canceled' && 'line-through',
-                      )}
-                    >
-                      {state === 'completed' && <Check className="size-3 shrink-0" strokeWidth={3} />}
-                      <span className="truncate">{subject.name}</span>
-                    </span>
-                    {blockHeight >= 44 && (
-                      <span className={cn('truncate text-[11px]', state === 'completed' ? 'text-zinc-400' : 'text-zinc-500')}>
-                        {SLOT_LABEL[slot.type]}
-                      </span>
-                    )}
-                    {blockHeight >= 64 && slot.room && (
-                      <span
-                        className={cn(
-                          'mt-auto flex items-center gap-1 truncate text-[11px] font-medium',
-                          state === 'completed' ? 'text-zinc-300' : 'text-zinc-600',
-                        )}
-                      >
-                        <MapPin className="size-3 shrink-0" />
-                        <span className="truncate">{slot.room}</span>
-                        {loc && <span className="opacity-60">· {loc.campus === 'zentrum' ? 'Z' : 'H'}</span>}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
             </div>
-          ))}
+            {DAYS.map((day) => (
+              <DayBody
+                key={day}
+                day={day}
+                week={week}
+                today={today}
+                hours={hours}
+                startMin={startMin}
+                height={height}
+                subjects={subjects}
+                nowTop={day === today && showNow ? nowTop : null}
+                onOpen={onOpen}
+              />
+            ))}
+          </div>
         </div>
       </div>
+    </div>
+  )
+}
 
+function DayPane({
+  day,
+  week,
+  today,
+  date,
+  hours,
+  startMin,
+  height,
+  subjects,
+  unscheduled,
+  nowTop,
+  snap,
+  onOpen,
+}: {
+  day: Day
+  week: number
+  today: Day | null
+  date: Date
+  hours: number[]
+  startMin: number
+  height: number
+  subjects: Subject[]
+  unscheduled: { subject: Subject; slot: Subject['scheduleSlots'][number] }[]
+  nowTop: number | null
+  snap: boolean
+  onOpen: (subject: Subject, slotId?: string) => void
+}) {
+  return (
+    <div className={cn('flex min-w-0 flex-col', snap && 'snap-start')}>
+      <DayHeader day={day} today={today} date={date} />
       {unscheduled.length > 0 && (
-        <p className="px-1 text-xs text-zinc-500">
-          {unscheduled.length} slot{unscheduled.length === 1 ? '' : 's'} without a parseable time (use e.g. 10:15-12:00):{' '}
-          {unscheduled.map(({ subject, slot }) => `${subject.name} ${slot.day}`).join(', ')}
-        </p>
+        <AllDayLane
+          day={day}
+          today={today}
+          items={unscheduled.filter(({ slot }) => slot.day === day)}
+          onOpen={onOpen}
+        />
+      )}
+      <DayBody
+        day={day}
+        week={week}
+        today={today}
+        hours={hours}
+        startMin={startMin}
+        height={height}
+        subjects={subjects}
+        nowTop={nowTop}
+        onOpen={onOpen}
+      />
+    </div>
+  )
+}
+
+function DayHeader({ day, today, date }: { day: Day; today: Day | null; date: Date }) {
+  const isToday = day === today
+  return (
+    <div
+      className={cn(
+        'flex h-16 flex-col items-center justify-center gap-0.5 border-l border-zinc-100',
+        WEEKEND_DAYS.includes(day) && 'bg-zinc-50/80',
+        isToday && 'bg-zinc-50',
+      )}
+    >
+      <span
+        className={cn(
+          'text-[11px] font-medium tracking-wide uppercase',
+          isToday ? 'text-zinc-900' : 'text-zinc-400',
+        )}
+      >
+        {day}
+      </span>
+      <span
+        className={cn(
+          'tabular inline-flex size-8 items-center justify-center rounded-full text-sm font-semibold',
+          isToday ? 'bg-zinc-900 text-white' : 'text-zinc-700',
+        )}
+      >
+        {date.getDate()}
+      </span>
+    </div>
+  )
+}
+
+function AllDayLane({
+  day,
+  today,
+  items,
+  onOpen,
+}: {
+  day: Day
+  today: Day | null
+  items: { subject: Subject; slot: Subject['scheduleSlots'][number] }[]
+  onOpen: (subject: Subject, slotId?: string) => void
+}) {
+  return (
+    <div
+      className={cn(
+        'flex min-h-10 flex-col justify-center gap-1 border-l border-t border-zinc-100 px-1 py-1',
+        WEEKEND_DAYS.includes(day) && 'bg-zinc-50/80',
+        day === today && 'bg-zinc-50',
+      )}
+    >
+      {items.map(({ subject, slot }) => (
+        <button
+          key={slot.id}
+          type="button"
+          onClick={() => onOpen(subject, slot.id)}
+          className={cn(
+            'min-h-8 truncate rounded-md px-1.5 text-left text-[11px] font-medium',
+            isCalendar(subject)
+              ? 'bg-calendar text-calendar-ink'
+              : 'bg-zinc-100 text-zinc-800',
+          )}
+        >
+          {subject.name}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function DayBody({
+  day,
+  week,
+  today,
+  hours,
+  startMin,
+  height,
+  subjects,
+  nowTop,
+  onOpen,
+}: {
+  day: Day
+  week: number
+  today: Day | null
+  hours: number[]
+  startMin: number
+  height: number
+  subjects: Subject[]
+  nowTop: number | null
+  onOpen: (subject: Subject, slotId?: string) => void
+}) {
+  return (
+    <div
+      className={cn(
+        'relative min-w-0 border-l border-zinc-100',
+        WEEKEND_DAYS.includes(day) && 'bg-zinc-50/60',
+        day === today && 'bg-zinc-50',
+      )}
+      style={{ height }}
+    >
+      {hours.map((h, i) =>
+        i === 0 ? null : (
+          <div key={h} className="absolute inset-x-0 border-t border-zinc-100" style={{ top: i * HOUR_PX }} />
+        ),
+      )}
+      {hours.map((h, i) =>
+        i === 0 ? null : (
+          <div
+            key={`${h}-half`}
+            className="absolute inset-x-0 border-t border-dashed border-zinc-100/80"
+            style={{ top: i * HOUR_PX - HOUR_PX / 2 }}
+          />
+        ),
+      )}
+      {layoutDaySlots(slotsForDay(subjects, day, week)).map((event) => {
+        const { subject, slot, start, end, lane, lanes } = event
+        const top = ((start - startMin) / 60) * HOUR_PX
+        const blockHeight = Math.max(((end - start) / 60) * HOUR_PX - 2, 28)
+        const calendar = isCalendar(subject)
+        const category = categoryForSlot(subject, slot.type)
+        const state = !calendar && category ? getProgress(subject, week, category) : 'pending'
+        const stats = weekStats(subject, week)
+        const done = !calendar && isWeekDone(subject, week)
+        const ratio = calendar ? 0 : done ? 1 : stats.ratio
+        const loc = parseRoom(slot.room)
+        const inset = 3
+        const kind = calendar ? 'calendar' : isOnce(subject) ? 'Once' : SLOT_LABEL[slot.type]
+        const face = (
+          <EventFace
+            name={subject.name}
+            type={kind === 'calendar' ? '' : kind}
+            time={`${formatMinutes(start)}–${formatMinutes(end)}`}
+            room={slot.room}
+            campus={loc?.campus === 'zentrum' ? 'Z' : loc ? 'H' : null}
+            height={blockHeight}
+            canceled={state === 'canceled'}
+            done={done}
+          />
+        )
+        return (
+          <button
+            key={slot.id}
+            type="button"
+            onClick={() => onOpen(subject, slot.id)}
+            aria-label={
+              calendar
+                ? `${subject.name}, ${DAY_LABEL[day]} ${slot.time}${slot.room ? `, ${slot.room}` : ''}`
+                : `${subject.name} ${isOnce(subject) ? 'once' : SLOT_LABEL[slot.type]}, ${DAY_LABEL[day]} ${slot.time}${slot.room ? `, ${slot.room}` : ''}, ${stats.completed} of ${stats.total - stats.canceled} done this week`
+            }
+            className={cn(
+              'absolute overflow-hidden rounded-md border text-left',
+              'transition-[border-color,box-shadow] duration-150 ease-out hover:shadow-md',
+              calendar
+                ? 'border-calendar-edge bg-calendar text-calendar-ink'
+                : state === 'canceled'
+                  ? 'border-dashed border-zinc-300 bg-white'
+                  : done
+                    ? 'border-zinc-900 bg-white'
+                    : 'border-zinc-200 bg-white',
+            )}
+            style={{
+              top: top + 1,
+              height: blockHeight,
+              left: `calc(${(lane / lanes) * 100}% + ${inset}px)`,
+              width: `calc(${100 / lanes}% - ${inset * 2}px)`,
+            }}
+          >
+            {!calendar && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-0 bottom-0 bg-zinc-900 transition-[height] duration-150 ease-out"
+                style={{ height: `${ratio * 100}%` }}
+              />
+            )}
+            <span className={cn('relative flex h-full flex-col', calendar ? 'text-calendar-ink' : 'text-zinc-900')}>
+              {face}
+            </span>
+            {!calendar && ratio > 0 && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 flex flex-col text-white"
+                style={{ clipPath: `inset(${(1 - ratio) * 100}% 0 0 0)` }}
+              >
+                {face}
+              </span>
+            )}
+          </button>
+        )
+      })}
+      {nowTop !== null && (
+        <div className="pointer-events-none absolute inset-x-0 z-10" style={{ top: nowTop }} aria-hidden="true">
+          <div className="relative">
+            <span className="absolute top-1/2 -left-1 size-2 -translate-y-1/2 rounded-full bg-zinc-900" />
+            <div className="h-px bg-zinc-900" />
+          </div>
+        </div>
       )}
     </div>
+  )
+}
+
+function EventFace({
+  name,
+  type,
+  time,
+  room,
+  campus,
+  height,
+  canceled,
+  done,
+}: {
+  name: string
+  type: string
+  time: string
+  room: string
+  campus: string | null
+  height: number
+  canceled: boolean
+  done: boolean
+}) {
+  return (
+    <>
+      <span
+        className={cn(
+          'flex items-center gap-1 px-1.5 pt-1 text-[12px] leading-tight font-semibold',
+          canceled && 'line-through opacity-50',
+        )}
+      >
+        {done && <Check className="size-3 shrink-0" strokeWidth={3} />}
+        <span className="truncate">{name}</span>
+      </span>
+      {height >= 40 && (
+        <span className="truncate px-1.5 text-[10px] leading-tight opacity-60">
+          {time}
+          {height >= 56 && type ? ` · ${type}` : ''}
+        </span>
+      )}
+      {height >= 72 && room && (
+        <span className="mt-auto flex items-center gap-1 truncate px-1.5 pb-1 text-[10px] font-medium opacity-75">
+          <MapPin className="size-3 shrink-0" />
+          <span className="truncate">{room}</span>
+          {campus && <span className="opacity-70">{campus}</span>}
+        </span>
+      )}
+    </>
   )
 }

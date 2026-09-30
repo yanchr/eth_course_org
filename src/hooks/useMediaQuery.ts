@@ -13,3 +13,5 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export const useIsDesktop = () => useMediaQuery('(min-width: 1024px)')
+/** Phone landscape / small laptop: week calendar instead of the single-day agenda. */
+export const useFitsWeekCalendar = () => useMediaQuery('(min-width: 560px)')

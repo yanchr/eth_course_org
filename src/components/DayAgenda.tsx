@@ -18,7 +18,7 @@ interface DayAgendaProps {
 
 export function DayAgenda({ week, day, onDayChange, onOpen }: DayAgendaProps) {
   const { subjects, settings } = usePlanner()
-  const items = slotsForDay(subjects, day)
+  const items = slotsForDay(subjects, day, week)
 
   return (
     <div className="flex flex-col gap-4">

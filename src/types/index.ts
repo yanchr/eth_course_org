@@ -27,6 +27,10 @@ export interface Subject {
   categories: string[]
   /** keyed by `${weekNumber}-${category}` */
   progress: Record<string, ProgressState>
+  /** When set, this is a one-off event that only exists in that semester week. */
+  onceWeek?: number
+  /** Calendar-only: shows on the timetable, never in to-dos or completion counts. */
+  calendarOnly?: boolean
 }
 
 export interface Settings {

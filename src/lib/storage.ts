@@ -59,6 +59,8 @@ function parseSubject(raw: unknown): Subject | null {
     }
   }
 
+  const calendarOnly = raw.calendarOnly === true
+
   return {
     id: str(raw.id) || createId(),
     name,
@@ -67,8 +69,15 @@ function parseSubject(raw: unknown): Subject | null {
     scheduleSlots: Array.isArray(raw.scheduleSlots)
       ? raw.scheduleSlots.map(parseSlot).filter((s) => s !== null)
       : [],
-    categories: categories.length ? categories : [...DEFAULT_CATEGORIES],
+    categories: calendarOnly ? categories : categories.length ? categories : [...DEFAULT_CATEGORIES],
     progress,
+    ...(typeof raw.onceWeek === 'number' &&
+    Number.isInteger(raw.onceWeek) &&
+    raw.onceWeek >= 1 &&
+    raw.onceWeek <= WEEK_COUNT
+      ? { onceWeek: raw.onceWeek }
+      : {}),
+    ...(calendarOnly ? { calendarOnly: true } : {}),
   }
 }
 

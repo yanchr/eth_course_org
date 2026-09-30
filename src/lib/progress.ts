@@ -1,4 +1,5 @@
 import type { ProgressState, Subject } from '../types'
+import { isTracked, occursInWeek } from './subjects'
 
 export function progressKey(week: number, category: string): string {
   return `${week}-${category}`
@@ -32,6 +33,7 @@ function stats(completed: number, canceled: number, total: number): ProgressStat
 }
 
 export function weekStats(subject: Subject, week: number): ProgressStats {
+  if (!isTracked(subject) || !occursInWeek(subject, week)) return stats(0, 0, 0)
   let completed = 0
   let canceled = 0
   for (const c of subject.categories) {
@@ -48,7 +50,7 @@ export function weekStats(subject: Subject, week: number): ProgressStats {
  * matching how `weekCompletions` scores an empty week.
  */
 export function isWeekDone(subject: Subject, week: number): boolean {
-  if (subject.categories.length === 0) return false
+  if (!isTracked(subject) || !occursInWeek(subject, week) || subject.categories.length === 0) return false
   const s = weekStats(subject, week)
   return s.completed + s.canceled === s.total
 }
@@ -58,14 +60,20 @@ export function sortByWeekOutstanding(subjects: Subject[], week: number): Subjec
   const outstanding: Subject[] = []
   const done: Subject[] = []
   for (const subject of subjects) {
+    if (!isTracked(subject) || !occursInWeek(subject, week)) continue
     if (isWeekDone(subject, week)) done.push(subject)
     else outstanding.push(subject)
   }
   return [...outstanding, ...done]
 }
 
-/** Stats across weeks 1..throughWeek (inclusive). */
+/** Stats across weeks 1..throughWeek (inclusive). One-off events only count their own week. */
 export function subjectStats(subject: Subject, throughWeek: number): ProgressStats {
+  if (!isTracked(subject)) return stats(0, 0, 0)
+  if (subject.onceWeek != null) {
+    if (subject.onceWeek > throughWeek) return stats(0, 0, subject.categories.length)
+    return weekStats(subject, subject.onceWeek)
+  }
   let completed = 0
   let canceled = 0
   for (let w = 1; w <= throughWeek; w++) {

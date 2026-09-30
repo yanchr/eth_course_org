@@ -7,9 +7,11 @@ import { QuickAddSubjects } from './QuickAddSubjects'
 
 interface EmptyStateProps {
   onAdd: () => void
+  onAddEvent: () => void
+  onAddCalendar: () => void
 }
 
-export function EmptyState({ onAdd }: EmptyStateProps) {
+export function EmptyState({ onAdd, onAddEvent, onAddCalendar }: EmptyStateProps) {
   const { replaceData } = usePlanner()
   const fileRef = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
@@ -36,12 +38,18 @@ export function EmptyState({ onAdd }: EmptyStateProps) {
         <code className="text-zinc-800">HG E 1.1</code> are placed on the campus map automatically.
       </p>
       <QuickAddSubjects onOpenDetailed={onAdd} className="mt-6 w-full text-left" />
+      <Button variant="ghost" size="sm" onClick={onAddEvent} className="mt-2">
+        Or add a one-off event
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onAddCalendar} className="mt-1">
+        Or add a calendar item
+      </Button>
       <Button
         variant="ghost"
         size="sm"
         icon={<Upload className="size-4" />}
         onClick={() => fileRef.current?.click()}
-        className="mt-3"
+        className="mt-1"
       >
         Or import a JSON backup
       </Button>

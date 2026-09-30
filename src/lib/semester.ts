@@ -61,20 +61,39 @@ export function todayDay(today = new Date()): Day {
   return DAYS[(today.getDay() + 6) % 7]
 }
 
-/** Parses "10:15-12:00", "10-12", "10.15 – 12" into minutes since midnight. */
+const RANGE_SEPARATOR = /\s*[-–—]\s*|\s+/
+
+/** "10", "10:15", "10.15", "10h15" and "1015" all read as minutes since midnight. */
+function timeToMinutes(part: string | undefined): number | null {
+  const m = part?.trim().match(/^(\d{1,2})[:.h]?(\d{2})?$/)
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2] ?? 0)
+  if (h > 23 || min > 59) return null
+  return h * 60 + min
+}
+
+export function formatMinutes(min: number): string {
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+}
+
+/** Parses "10:15-12:00", "10-12", "10.15 – 12", "1015 1200" into minutes since midnight. */
 export function parseTimeRange(time: string): { start: number; end: number } | null {
-  const parts = time.split(/\s*[-–—]\s*/)
-  const toMin = (s: string | undefined): number | null => {
-    if (!s) return null
-    const m = s.trim().match(/^(\d{1,2})(?:[:.h](\d{2}))?$/)
-    if (!m) return null
-    const h = Number(m[1])
-    const min = Number(m[2] ?? 0)
-    if (h > 23 || min > 59) return null
-    return h * 60 + min
-  }
-  const start = toMin(parts[0])
+  const parts = time.trim().split(RANGE_SEPARATOR)
+  const start = timeToMinutes(parts[0])
   if (start === null) return null
-  const end = toMin(parts[1]) ?? start + 105
+  const end = timeToMinutes(parts[1]) ?? start + 105
   return { start, end: Math.max(end, start + 30) }
+}
+
+/** Tidies typed input into "HH:MM-HH:MM"; anything unreadable is left as the user wrote it. */
+export function normalizeTimeRange(time: string): string {
+  const trimmed = time.trim()
+  const parts = trimmed.split(RANGE_SEPARATOR)
+  if (parts.length > 2) return trimmed
+  const start = timeToMinutes(parts[0])
+  if (start === null) return trimmed
+  if (parts.length === 1) return formatMinutes(start)
+  const end = timeToMinutes(parts[1])
+  return end === null ? trimmed : `${formatMinutes(start)}-${formatMinutes(end)}`
 }

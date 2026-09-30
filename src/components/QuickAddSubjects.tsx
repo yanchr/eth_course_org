@@ -14,7 +14,7 @@ interface Staged {
 }
 
 interface QuickAddSubjectsProps {
-  /** start collapsed behind an "Add subjects" button */
+  /** dashed button that opens the full editor */
   collapsible?: boolean
   onOpenDetailed: () => void
   className?: string
@@ -30,7 +30,6 @@ function parseEntry(raw: string): Omit<Staged, 'id'> | null {
 
 export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: QuickAddSubjectsProps) {
   const { subjects, addSubjects } = usePlanner()
-  const [open, setOpen] = useState(!collapsible)
   const [draft, setDraft] = useState('')
   const [staged, setStaged] = useState<Staged[]>([])
   const [added, setAdded] = useState<number | null>(null)
@@ -42,6 +41,21 @@ export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: Qui
     const t = window.setTimeout(() => setAdded(null), 2500)
     return () => window.clearTimeout(t)
   }, [added])
+
+  if (collapsible) {
+    return (
+      <div className={cn('flex flex-col gap-2', className)}>
+        <button
+          type="button"
+          onClick={onOpenDetailed}
+          className="flex min-h-14 w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-zinc-300 bg-white/50 text-sm font-medium text-zinc-600 transition-colors duration-150 ease-out hover:border-zinc-400 hover:bg-white hover:text-zinc-900"
+        >
+          <Plus className="size-4" />
+          Add subjects
+        </button>
+      </div>
+    )
+  }
 
   const existing = new Set(subjects.map((s) => s.name.toLowerCase()))
   const isDuplicate = (entry: Staged, index: number) =>
@@ -73,7 +87,6 @@ export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: Qui
     setAdded(toCreate.length)
     setStaged([])
     setDraft('')
-    if (collapsible) setOpen(false)
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -83,8 +96,6 @@ export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: Qui
       else stage([draft])
     } else if (e.key === 'Backspace' && !draft && staged.length) {
       setStaged((prev) => prev.slice(0, -1))
-    } else if (e.key === 'Escape' && collapsible && !draft && !staged.length) {
-      setOpen(false)
     }
   }
 
@@ -93,25 +104,6 @@ export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: Qui
     if (!/\r?\n/.test(text)) return
     e.preventDefault()
     stage(text.split(/\r?\n/))
-  }
-
-  if (!open) {
-    return (
-      <div className={cn('flex flex-col gap-2', className)}>
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(true)
-            requestAnimationFrame(() => inputRef.current?.focus())
-          }}
-          className="flex min-h-14 w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-zinc-300 bg-white/50 text-sm font-medium text-zinc-600 transition-colors duration-150 ease-out hover:border-zinc-400 hover:bg-white hover:text-zinc-900"
-        >
-          <Plus className="size-4" />
-          Add subjects
-        </button>
-        {added !== null && <AddedNotice count={added} />}
-      </div>
-    )
   }
 
   return (
@@ -128,20 +120,6 @@ export function QuickAddSubjects({ collapsible, onOpenDetailed, className }: Qui
             One per line. Add a lecturer after a comma. Paste a list to add many at once.
           </p>
         </div>
-        {collapsible && (
-          <button
-            type="button"
-            aria-label="Close quick add"
-            onClick={() => {
-              setOpen(false)
-              setStaged([])
-              setDraft('')
-            }}
-            className="-mt-1 -mr-1 flex size-9 items-center justify-center rounded-xl text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900"
-          >
-            <X className="size-4" />
-          </button>
-        )}
       </div>
 
       {staged.length > 0 && (

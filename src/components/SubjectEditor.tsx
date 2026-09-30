@@ -9,38 +9,60 @@ import {
   type SubjectLink,
 } from '../types'
 import { createId } from '../lib/id'
-import { createSubject } from '../lib/subjects'
+import { createCalendarItem, createEvent, createSubject } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { DAY_LABEL, SLOT_LABEL } from '../lib/schedule'
+import { normalizeTimeRange } from '../lib/semester'
+import { usePlanner } from '../hooks/usePlannerStore'
 import { Sheet } from './ui/Sheet'
 import { Button } from './ui/Button'
 import { Field, inputClass } from './ui/Field'
 import { IconButton } from './ui/IconButton'
 import { Pill } from './ui/Pill'
 import { CampusBadge } from './CampusBadge'
+import { cn } from '../lib/cn'
+
+export type EditorTarget = Subject | 'new' | 'event' | 'calendar'
 
 interface SubjectEditorProps {
-  /** null = closed, 'new' = create */
-  subject: Subject | 'new' | null
+  /** null = closed, 'new' = weekly subject, 'event' = one-off to-do, 'calendar' = schedule only */
+  subject: EditorTarget | null
+  defaultWeek: number
   onClose: () => void
   onSave: (subject: Subject) => void
   onDelete: (id: string) => void
 }
 
-export function SubjectEditor({ subject, onClose, onSave, onDelete }: SubjectEditorProps) {
-  const isNew = subject === 'new'
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
+function editorTitle(subject: EditorTarget | null): string {
+  if (subject === null) return ''
+  if (subject === 'new') return 'New subject'
+  if (subject === 'event') return 'New event'
+  if (subject === 'calendar') return 'New calendar item'
+  if (subject.calendarOnly) return 'Edit calendar item'
+  return subject.onceWeek != null ? 'Edit event' : 'Edit subject'
+}
+
+function initialDraft(subject: EditorTarget, defaultWeek: number): Subject {
+  if (subject === 'new') return createSubject()
+  if (subject === 'event') return createEvent(defaultWeek)
+  if (subject === 'calendar') return createCalendarItem(defaultWeek)
+  return subject
+}
+
+export function SubjectEditor({ subject, defaultWeek, onClose, onSave, onDelete }: SubjectEditorProps) {
+  const isCreate = subject === 'new' || subject === 'event' || subject === 'calendar'
   return (
-    <Sheet
-      open={subject !== null}
-      onClose={onClose}
-      width="lg"
-      title={isNew ? 'New subject' : 'Edit subject'}
-    >
+    <Sheet open={subject !== null} onClose={onClose} width="lg" title={editorTitle(subject)}>
       {subject !== null && (
         <EditorForm
-          key={isNew ? 'new' : subject.id}
-          initial={isNew ? createSubject() : subject}
-          isNew={isNew}
+          key={isCreate ? String(subject) : subject.id}
+          initial={initialDraft(subject, defaultWeek)}
+          isNew={isCreate}
+          defaultWeek={defaultWeek}
           onCancel={onClose}
           onSave={onSave}
           onDelete={onDelete}
@@ -59,22 +81,60 @@ function normalizeUrl(url: string): string {
 interface EditorFormProps {
   initial: Subject
   isNew: boolean
+  defaultWeek: number
   onCancel: () => void
   onSave: (subject: Subject) => void
   onDelete: (id: string) => void
 }
 
-function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormProps) {
+function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }: EditorFormProps) {
+  const { settings } = usePlanner()
   const [draft, setDraft] = useState<Subject>(initial)
   const [newCategory, setNewCategory] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [nameError, setNameError] = useState(false)
+
+  const once = draft.onceWeek != null
+  const calendar = draft.calendarOnly === true
 
   const patch = (p: Partial<Subject>) => setDraft((d) => ({ ...d, ...p }))
   const patchSlot = (id: string, p: Partial<ScheduleSlot>) =>
     patch({ scheduleSlots: draft.scheduleSlots.map((s) => (s.id === id ? { ...s, ...p } : s)) })
   const patchLink = (id: string, p: Partial<SubjectLink>) =>
     patch({ links: draft.links.map((l) => (l.id === id ? { ...l, ...p } : l)) })
+
+  const setKind = (kind: 'weekly' | 'once') => {
+    if (kind === 'once') {
+      patch({
+        onceWeek: draft.onceWeek ?? defaultWeek,
+        categories: calendar
+          ? draft.categories
+          : sameList(draft.categories, DEFAULT_CATEGORIES)
+            ? ['Event']
+            : draft.categories,
+      })
+      return
+    }
+    patch({
+      onceWeek: undefined,
+      categories: calendar
+        ? draft.categories
+        : sameList(draft.categories, ['Event'])
+          ? [...DEFAULT_CATEGORIES]
+          : draft.categories,
+    })
+  }
+
+  const setTrack = (track: 'todo' | 'calendar') => {
+    if (track === 'calendar') {
+      patch({ calendarOnly: true, categories: [] })
+      return
+    }
+    patch({
+      calendarOnly: undefined,
+      categories: once ? ['Event'] : [...DEFAULT_CATEGORIES],
+    })
+  }
 
   const addCategory = () => {
     const name = newCategory.trim()
@@ -94,7 +154,15 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
       ...draft,
       name,
       lecturer: draft.lecturer.trim(),
-      categories: draft.categories.length ? draft.categories : [...DEFAULT_CATEGORIES],
+      onceWeek: once ? draft.onceWeek : undefined,
+      calendarOnly: calendar ? true : undefined,
+      categories: calendar
+        ? []
+        : draft.categories.length
+          ? draft.categories
+          : once
+            ? ['Event']
+            : [...DEFAULT_CATEGORIES],
       links: draft.links
         .map((l) => ({ ...l, url: normalizeUrl(l.url), label: l.label.trim() }))
         .filter((l) => l.url)
@@ -105,85 +173,139 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-7">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          label="Name"
-          value={draft.name}
-          onChange={(e) => {
-            patch({ name: e.target.value })
-            setNameError(false)
-          }}
-          placeholder="e.g. Informatik"
-          data-autofocus
-          aria-invalid={nameError}
-          hint={nameError ? <span className="text-red-600">A name is required.</span> : undefined}
-        />
-        <Field
-          label="Lecturer"
-          value={draft.lecturer}
-          onChange={(e) => patch({ lecturer: e.target.value })}
-          placeholder="e.g. Prof. Dr. Muster"
-        />
+      <div className="flex flex-col gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Name"
+            value={draft.name}
+            onChange={(e) => {
+              patch({ name: e.target.value })
+              setNameError(false)
+            }}
+            placeholder={calendar ? 'e.g. Gym' : once ? 'e.g. Midterm' : 'e.g. Informatik'}
+            data-autofocus
+            aria-invalid={nameError}
+            hint={nameError ? <span className="text-red-600">A name is required.</span> : undefined}
+          />
+          <Field
+            label={calendar ? 'Note' : once ? 'Host' : 'Lecturer'}
+            value={draft.lecturer}
+            onChange={(e) => patch({ lecturer: e.target.value })}
+            placeholder={calendar || once ? 'Optional' : 'e.g. Prof. Dr. Muster'}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+          <ModeToggle
+            label="Repeats"
+            off="Every week"
+            on="Once"
+            checked={once}
+            onChange={(next) => setKind(next ? 'once' : 'weekly')}
+          />
+          <ModeToggle
+            label="Counts as"
+            off="To-do"
+            on="Calendar only"
+            checked={calendar}
+            onChange={(next) => setTrack(next ? 'calendar' : 'todo')}
+          />
+        </div>
       </div>
 
-      <Section title="Progress categories" description="Rows tracked every week.">
-        <div className="flex flex-wrap gap-2">
-          {draft.categories.map((c) => (
-            <span
-              key={c}
-              className="inline-flex h-9 items-center gap-1 rounded-full border border-zinc-200 bg-white pr-1 pl-3.5 text-sm font-medium text-zinc-800"
-            >
-              {c}
-              <button
-                type="button"
-                aria-label={`Remove ${c}`}
-                onClick={() => patch({ categories: draft.categories.filter((x) => x !== c) })}
-                className="flex size-7 items-center justify-center rounded-full text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                <X className="size-3.5" />
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="flex gap-2">
-          <input
-            className={inputClass}
-            value={newCategory}
-            placeholder="Add category"
-            aria-label="New category name"
-            onChange={(e) => setNewCategory(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                addCategory()
-              }
-            }}
-          />
-          <Button onClick={addCategory} icon={<Plus className="size-4" />} disabled={!newCategory.trim()}>
-            Add
-          </Button>
-        </div>
-      </Section>
+      {once && (
+        <Section title="Week" description="This only appears in the week you pick.">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Week">
+            {Array.from({ length: settings.weekCount }, (_, i) => {
+              const w = i + 1
+              return (
+                <Pill
+                  key={w}
+                  active={draft.onceWeek === w}
+                  onClick={() => patch({ onceWeek: w })}
+                  className="min-w-11 max-sm:h-11"
+                >
+                  W{w}
+                </Pill>
+              )
+            })}
+          </div>
+        </Section>
+      )}
 
-      <Section title="Schedule" description="Rooms like HG E 1.1 or HPH G 3 are placed on the campus map.">
+      {!once && !calendar && (
+        <Section title="Progress categories" description="Rows tracked every week.">
+          <div className="flex flex-wrap gap-2">
+            {draft.categories.map((c) => (
+              <span
+                key={c}
+                className="inline-flex h-9 items-center gap-1 rounded-full border border-zinc-200 bg-white pr-1 pl-3.5 text-sm font-medium text-zinc-800"
+              >
+                {c}
+                <button
+                  type="button"
+                  aria-label={`Remove ${c}`}
+                  onClick={() => patch({ categories: draft.categories.filter((x) => x !== c) })}
+                  className="flex size-7 items-center justify-center rounded-full text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className={inputClass}
+              value={newCategory}
+              placeholder="Add category"
+              aria-label="New category name"
+              onChange={(e) => setNewCategory(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  addCategory()
+                }
+              }}
+            />
+            <Button onClick={addCategory} icon={<Plus className="size-4" />} disabled={!newCategory.trim()}>
+              Add
+            </Button>
+          </div>
+        </Section>
+      )}
+
+      <Section
+        title="Schedule"
+        description={
+          calendar
+            ? "Shown on the timetable only, not in this week's to-dos."
+            : once
+              ? 'Day, time and room for this single occurrence.'
+              : 'Rooms like HG E 1.1 or HPH G 3 are placed on the campus map.'
+        }
+      >
         <ul className="flex flex-col gap-3">
           {draft.scheduleSlots.map((slot) => {
             const loc = parseRoom(slot.room)
             return (
               <li key={slot.id} className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-3">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Slot type">
-                    {SLOT_TYPES.map((t) => (
-                      <Pill
-                        key={t}
-                        active={slot.type === t}
-                        onClick={() => patchSlot(slot.id, { type: t })}
-                        className="max-sm:h-11"
-                      >
-                        {SLOT_LABEL[t]}
-                      </Pill>
-                    ))}
-                  </div>
+                  {!once && !calendar ? (
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Slot type">
+                      {SLOT_TYPES.map((t) => (
+                        <Pill
+                          key={t}
+                          active={slot.type === t}
+                          onClick={() => patchSlot(slot.id, { type: t })}
+                          className="max-sm:h-11"
+                        >
+                          {SLOT_LABEL[t]}
+                        </Pill>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-sm font-medium text-zinc-500">When</span>
+                  )}
                   <IconButton
                     label="Remove slot"
                     onClick={() => patch({ scheduleSlots: draft.scheduleSlots.filter((s) => s.id !== slot.id) })}
@@ -209,8 +331,11 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
                     label="Time"
                     value={slot.time}
                     onChange={(e) => patchSlot(slot.id, { time: e.target.value })}
+                    onBlur={(e) => patchSlot(slot.id, { time: normalizeTimeRange(e.target.value) })}
                     placeholder="10:15-12:00"
-                    inputMode="numeric"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
                   />
                   <Field
                     label="Room"
@@ -247,7 +372,10 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
         </Button>
       </Section>
 
-      <Section title="Links" description="Course page, Moodle, exercise repo…">
+      <Section
+        title="Links"
+        description={calendar ? 'Optional' : once ? 'Slides, Zoom, signup sheet…' : 'Course page, Moodle, exercise repo…'}
+      >
         <ul className="flex flex-col gap-2">
           {draft.links.map((link) => (
             <li key={link.id} className="flex items-center gap-2">
@@ -272,10 +400,7 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
             </li>
           ))}
         </ul>
-        <Button
-          icon={<Plus className="size-4" />}
-          onClick={() => patch({ links: [...draft.links, { id: createId(), label: '', url: '' }] })}
-        >
+        <Button icon={<Plus className="size-4" />} onClick={() => patch({ links: [...draft.links, { id: createId(), label: '', url: '' }] })}>
           Add link
         </Button>
       </Section>
@@ -301,11 +426,67 @@ function EditorForm({ initial, isNew, onCancel, onSave, onDelete }: EditorFormPr
             Cancel
           </Button>
           <Button type="submit" variant="primary" className="flex-1 sm:flex-none">
-            {isNew ? 'Create subject' : 'Save changes'}
+            {isNew ? (calendar ? 'Add to calendar' : once ? 'Create event' : 'Create subject') : 'Save changes'}
           </Button>
         </div>
       </div>
     </form>
+  )
+}
+
+function ModeToggle({
+  label,
+  off,
+  on,
+  checked,
+  onChange,
+}: {
+  label: string
+  off: string
+  on: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={`${label}, ${checked ? on : off}`}
+      onClick={() => onChange(!checked)}
+      className="flex h-11 items-center gap-2.5 rounded-lg pr-1 text-sm select-none"
+    >
+      <span
+        className={cn(
+          'transition-colors duration-150 ease-out',
+          checked ? 'text-zinc-400' : 'font-medium text-zinc-800',
+        )}
+      >
+        {off}
+      </span>
+      <span
+        aria-hidden
+        className={cn(
+          'relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150 ease-out',
+          checked ? 'bg-zinc-900' : 'bg-zinc-200',
+        )}
+      >
+        <span
+          className={cn(
+            'absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow-sm transition-transform duration-150 ease-out',
+            checked && 'translate-x-4',
+          )}
+        />
+      </span>
+      <span
+        className={cn(
+          'transition-colors duration-150 ease-out',
+          checked ? 'font-medium text-zinc-800' : 'text-zinc-400',
+        )}
+      >
+        {on}
+      </span>
+    </button>
   )
 }
 

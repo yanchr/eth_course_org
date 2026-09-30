@@ -24,7 +24,8 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
   const tableRef = useRef<HTMLTableElement>(null)
   const [focus, setFocus] = useState({ row: 0, col: selectedWeek - 1 })
 
-  const rows = subjects.flatMap((s) => s.categories.map((c) => ({ subject: s, category: c })))
+  const weekly = subjects.filter((s) => s.onceWeek == null && !s.calendarOnly)
+  const rows = weekly.flatMap((s) => s.categories.map((c) => ({ subject: s, category: c })))
   const rowCount = rows.length
   const activeRow = Math.min(focus.row, Math.max(0, rowCount - 1))
 
@@ -51,6 +52,14 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
   }
 
   let rowIndex = -1
+
+  if (weekly.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-zinc-200 px-6 py-10 text-center text-sm text-zinc-400">
+        One-off events appear on the week they belong to, not in this grid.
+      </div>
+    )
+  }
 
   return (
     <div className="overflow-x-auto overscroll-x-contain rounded-2xl border border-zinc-200 bg-white shadow-xs">
@@ -108,7 +117,7 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
           </tr>
         </thead>
         <tbody>
-          {subjects.map((subject, si) => {
+          {weekly.map((subject, si) => {
             const stats = subjectStats(subject, Math.max(1, todayWeek))
             return (
               <Fragment key={subject.id}>
