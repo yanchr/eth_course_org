@@ -3,9 +3,11 @@ import {
   DEFAULT_CATEGORIES,
   SLOT_TYPES,
   WEEK_COUNT,
+  type ActiveStudy,
   type PlannerData,
   type ProgressState,
   type ScheduleSlot,
+  type StudySession,
   type Subject,
   type SubjectLink,
 } from '../types'
@@ -19,6 +21,8 @@ export function createDefaultData(): PlannerData {
     version: 1,
     settings: { semesterStartDate: DEFAULT_SEMESTER_START, weekCount: WEEK_COUNT },
     subjects: [],
+    studySessions: [],
+    activeStudy: null,
   }
 }
 
@@ -81,6 +85,39 @@ function parseSubject(raw: unknown): Subject | null {
   }
 }
 
+const isWeek = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= WEEK_COUNT
+const isDuration = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+const stringList = (v: unknown): string[] =>
+  Array.isArray(v) ? [...new Set(v.filter((c): c is string => typeof c === 'string' && c !== ''))] : []
+
+function parseStudySession(raw: unknown): StudySession | null {
+  if (!isObject(raw)) return null
+  const subjectId = str(raw.subjectId)
+  if (!subjectId || !isWeek(raw.week) || !isDuration(raw.durationMs)) return null
+  return {
+    id: str(raw.id) || createId(),
+    subjectId,
+    week: raw.week,
+    categories: stringList(raw.categories),
+    durationMs: raw.durationMs,
+    endedAt: str(raw.endedAt),
+  }
+}
+
+function parseActiveStudy(raw: unknown): ActiveStudy | null {
+  if (!isObject(raw)) return null
+  const subjectId = str(raw.subjectId)
+  if (!subjectId || !isWeek(raw.week)) return null
+  return {
+    subjectId,
+    week: raw.week,
+    categories: stringList(raw.categories),
+    accumulatedMs: isDuration(raw.accumulatedMs) ? raw.accumulatedMs : 0,
+    resumedAt: isDuration(raw.resumedAt) ? raw.resumedAt : null,
+  }
+}
+
 /** Validates an unknown blob into PlannerData, or returns null if it isn't one. */
 export function parsePlannerData(raw: unknown): PlannerData | null {
   if (!isObject(raw) || !Array.isArray(raw.subjects)) return null
@@ -94,6 +131,10 @@ export function parsePlannerData(raw: unknown): PlannerData | null {
       weekCount: WEEK_COUNT,
     },
     subjects: raw.subjects.map(parseSubject).filter((s) => s !== null),
+    studySessions: Array.isArray(raw.studySessions)
+      ? raw.studySessions.map(parseStudySession).filter((s) => s !== null)
+      : [],
+    activeStudy: parseActiveStudy(raw.activeStudy),
   }
 }
 

@@ -8,9 +8,14 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { PlannerData, ProgressState, Settings, Subject } from '../types'
+import type { PlannerData, ProgressState, Settings, StudySession, Subject } from '../types'
 import { STORAGE_KEY, createDefaultData, loadData, saveData } from '../lib/storage'
 import { progressKey } from '../lib/progress'
+import { activeElapsedMs } from '../lib/study'
+import { createId } from '../lib/id'
+
+/** Shorter sessions are treated as accidental taps and not logged. */
+const MIN_SESSION_MS = 1000
 
 interface PlannerStore {
   data: PlannerData
@@ -20,6 +25,10 @@ interface PlannerStore {
   addSubjects: (subjects: Subject[]) => void
   deleteSubject: (id: string) => void
   setProgress: (subjectId: string, week: number, category: string, state: ProgressState) => void
+  startStudy: (subjectId: string, week: number, categories: string[]) => void
+  pauseStudy: () => void
+  resumeStudy: () => void
+  stopStudy: () => void
   updateSettings: (patch: Partial<Settings>) => void
   replaceData: (data: PlannerData) => void
   resetData: () => void
@@ -90,6 +99,50 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
     [],
   )
 
+  const startStudy = useCallback((subjectId: string, week: number, categories: string[]) => {
+    setData((prev) => ({
+      ...prev,
+      activeStudy: { subjectId, week, categories, accumulatedMs: 0, resumedAt: Date.now() },
+    }))
+  }, [])
+
+  const pauseStudy = useCallback(() => {
+    setData((prev) => {
+      const active = prev.activeStudy
+      if (!active || active.resumedAt === null) return prev
+      return { ...prev, activeStudy: { ...active, accumulatedMs: activeElapsedMs(active), resumedAt: null } }
+    })
+  }, [])
+
+  const resumeStudy = useCallback(() => {
+    setData((prev) => {
+      const active = prev.activeStudy
+      if (!active || active.resumedAt !== null) return prev
+      return { ...prev, activeStudy: { ...active, resumedAt: Date.now() } }
+    })
+  }, [])
+
+  const stopStudy = useCallback(() => {
+    setData((prev) => {
+      const active = prev.activeStudy
+      if (!active) return prev
+      const durationMs = activeElapsedMs(active)
+      const session: StudySession = {
+        id: createId(),
+        subjectId: active.subjectId,
+        week: active.week,
+        categories: active.categories,
+        durationMs,
+        endedAt: new Date().toISOString(),
+      }
+      return {
+        ...prev,
+        activeStudy: null,
+        studySessions: durationMs >= MIN_SESSION_MS ? [...prev.studySessions, session] : prev.studySessions,
+      }
+    })
+  }, [])
+
   const updateSettings = useCallback((patch: Partial<Settings>) => {
     setData((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }))
   }, [])
@@ -106,11 +159,28 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       addSubjects,
       deleteSubject,
       setProgress,
+      startStudy,
+      pauseStudy,
+      resumeStudy,
+      stopStudy,
       updateSettings,
       replaceData,
       resetData,
     }),
-    [data, upsertSubject, addSubjects, deleteSubject, setProgress, updateSettings, replaceData, resetData],
+    [
+      data,
+      upsertSubject,
+      addSubjects,
+      deleteSubject,
+      setProgress,
+      startStudy,
+      pauseStudy,
+      resumeStudy,
+      stopStudy,
+      updateSettings,
+      replaceData,
+      resetData,
+    ],
   )
 
   return <PlannerContext.Provider value={value}>{children}</PlannerContext.Provider>

@@ -38,10 +38,32 @@ export interface Settings {
   weekCount: number
 }
 
+export interface StudySession {
+  id: string
+  subjectId: string
+  week: number
+  /** Todos the time is split across; empty means the time only counts for the course. */
+  categories: string[]
+  durationMs: number
+  endedAt: string
+}
+
+export interface ActiveStudy {
+  subjectId: string
+  week: number
+  categories: string[]
+  /** Active time banked before the current run. */
+  accumulatedMs: number
+  /** Epoch ms when the current run started; null while paused. */
+  resumedAt: number | null
+}
+
 export interface PlannerData {
   version: 1
   settings: Settings
   subjects: Subject[]
+  studySessions: StudySession[]
+  activeStudy: ActiveStudy | null
 }
 
 export const DAYS: Day[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
