@@ -5,7 +5,8 @@ export type Campus = 'zentrum' | 'hoenggerberg'
 
 export interface ScheduleSlot {
   id: string
-  type: SlotType
+  /** "lecture" | "exercise" | "summary", or a custom label such as "Praktika". */
+  type: string
   day: Day
   /** "HH:MM-HH:MM" or "HH:MM" */
   time: string
@@ -18,6 +19,15 @@ export interface SubjectLink {
   url: string
 }
 
+/** A single event folded into a weekly subject: one to-do, and its slots, in one week. */
+export interface SubjectEvent {
+  id: string
+  name: string
+  week: number
+  slots: ScheduleSlot[]
+  links: SubjectLink[]
+}
+
 export interface Subject {
   id: string
   name: string
@@ -27,6 +37,8 @@ export interface Subject {
   categories: string[]
   /** keyed by `${weekNumber}-${category}` */
   progress: Record<string, ProgressState>
+  /** One-off to-dos added onto this subject. Each exists only in its week. */
+  events?: SubjectEvent[]
   /** When set, this is a one-off event that only exists in that semester week. */
   onceWeek?: number
   /** Calendar-only: shows on the timetable, never in to-dos or completion counts. */
@@ -44,7 +56,9 @@ export interface StudySession {
   week: number
   /** Todos the time is split across; empty means the time only counts for the course. */
   categories: string[]
+  /** Active study time; less than endedAt - startedAt when the session was paused. */
   durationMs: number
+  startedAt: string
   endedAt: string
 }
 
@@ -52,6 +66,8 @@ export interface ActiveStudy {
   subjectId: string
   week: number
   categories: string[]
+  /** Epoch ms of the first start. */
+  startedAt: number
   /** Active time banked before the current run. */
   accumulatedMs: number
   /** Epoch ms when the current run started; null while paused. */

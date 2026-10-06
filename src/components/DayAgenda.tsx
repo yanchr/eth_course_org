@@ -2,7 +2,8 @@ import { Check, MapPin } from 'lucide-react'
 import { DAYS, type Day, type Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { dateForDay, formatDayDate } from '../lib/semester'
-import { categoryForSlot, DAY_LABEL, SLOT_LABEL, slotsForDay } from '../lib/schedule'
+import { categoryForSlot, DAY_LABEL, slotLabel, slotsForDay } from '../lib/schedule'
+import { eventForSlot } from '../lib/subjects'
 import { getProgress } from '../lib/progress'
 import { parseRoom } from '../lib/campus'
 import { cn } from '../lib/cn'
@@ -40,7 +41,8 @@ export function DayAgenda({ week, day, onDayChange, onOpen }: DayAgendaProps) {
         <ol className="flex flex-col gap-2">
           {items.map(({ subject, slot }) => {
             const loc = parseRoom(slot.room)
-            const category = categoryForSlot(subject, slot.type)
+            const attached = eventForSlot(subject, slot.id)
+            const category = attached?.name ?? categoryForSlot(subject, slot.type, slot.id)
             const state = category ? getProgress(subject, week, category) : 'pending'
             return (
               <li key={slot.id}>
@@ -67,7 +69,7 @@ export function DayAgenda({ week, day, onDayChange, onOpen }: DayAgendaProps) {
                       {state === 'completed' && <Check className="size-4 shrink-0" strokeWidth={3} />}
                       <span className="truncate">{subject.name}</span>
                     </div>
-                    <div className="text-sm text-zinc-500">{SLOT_LABEL[slot.type]}</div>
+                    <div className="text-sm text-zinc-500">{attached ? attached.name : slotLabel(slot.type)}</div>
                     {loc && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <span className="flex items-center gap-1 text-sm font-medium text-zinc-700">

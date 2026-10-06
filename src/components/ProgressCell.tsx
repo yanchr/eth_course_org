@@ -13,6 +13,8 @@ interface ProgressCellProps {
   variant?: 'grid' | 'card'
   /** visible label for the card variant */
   label?: string
+  /** Compact average already logged for this todo, e.g. "42m". */
+  averageLabel?: string
   highlighted?: boolean
   tabIndex?: number
   onKeyDown?: (e: KeyboardEvent<HTMLButtonElement>) => void
@@ -25,6 +27,7 @@ export function ProgressCell({
   context,
   variant = 'grid',
   label,
+  averageLabel,
   highlighted,
   tabIndex,
   onKeyDown,
@@ -55,14 +58,14 @@ export function ProgressCell({
             highlighted && 'border-zinc-300',
           )
 
-  const title = `${context}: ${stateLabel(state)}. Tap to toggle done, long-press or right-click for no class.`
+  const title = `${context}: ${stateLabel(state)}${averageLabel ? `, ${averageLabel} average` : ''}. Tap to toggle done, long-press or right-click for no class.`
 
   if (variant === 'card') {
     return (
       <button
         type="button"
         aria-pressed={state === 'completed'}
-        aria-label={`${context}, ${stateLabel(state)}`}
+        aria-label={`${context}, ${stateLabel(state)}${averageLabel ? `, ${averageLabel} average` : ''}`}
         title={title}
         tabIndex={tabIndex}
         {...dataAttrs}
@@ -86,8 +89,15 @@ export function ProgressCell({
           </span>
           <StateGlyph state={state} className="size-4" />
         </span>
-        <span className="text-[11px] font-medium tracking-wide text-zinc-400 uppercase">
-          {state === 'completed' ? 'Done' : state === 'canceled' ? 'No class' : 'Open'}
+        <span className="flex w-full items-baseline justify-between gap-1">
+          <span className="truncate text-[11px] font-medium tracking-wide text-zinc-400 uppercase">
+            {state === 'completed' ? 'Done' : state === 'canceled' ? 'No class' : 'Open'}
+          </span>
+          {averageLabel && (
+            <span className="tabular shrink-0 text-[10px] font-medium tracking-normal text-zinc-400 normal-case">
+              {averageLabel}
+            </span>
+          )}
         </span>
       </button>
     )

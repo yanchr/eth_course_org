@@ -1,8 +1,10 @@
+import { useMemo } from 'react'
 import { ChevronRight, Plus } from 'lucide-react'
 import type { Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { subjectStats, weekStats } from '../lib/progress'
 import { isCalendar, isOnce } from '../lib/subjects'
+import { formatDuration, studyStats } from '../lib/study'
 import { cn } from '../lib/cn'
 import { Button } from './ui/Button'
 
@@ -15,7 +17,12 @@ interface SubjectListProps {
 }
 
 export function SubjectList({ todayWeek, onOpen, onAdd, onAddEvent, onAddCalendar }: SubjectListProps) {
-  const { subjects, settings } = usePlanner()
+  const { subjects, settings, data } = usePlanner()
+  const studyBySubject = useMemo(() => {
+    const map = new Map<string, { totalMs: number; avgPerWeekMs: number }>()
+    for (const s of studyStats(data.studySessions).subjects) map.set(s.subjectId, s)
+    return map
+  }, [data.studySessions])
 
   return (
     <div className="flex flex-col gap-3">
@@ -23,6 +30,8 @@ export function SubjectList({ todayWeek, onOpen, onAdd, onAddEvent, onAddCalenda
         {subjects.map((subject) => {
           const stats = subjectStats(subject, Math.max(1, todayWeek))
           const calendar = isCalendar(subject)
+          const slotCount =
+            subject.scheduleSlots.length + (subject.events ?? []).reduce((sum, event) => sum + event.slots.length, 0)
           return (
             <li key={subject.id}>
               <button
@@ -47,10 +56,21 @@ export function SubjectList({ todayWeek, onOpen, onAdd, onAddEvent, onAddCalenda
                           : 'Calendar · every week'
                         : isOnce(subject)
                           ? `Once · week ${subject.onceWeek}`
-                          : `${subject.lecturer || 'No lecturer set'} · ${subject.scheduleSlots.length} slot${
-                              subject.scheduleSlots.length === 1 ? '' : 's'
-                            }`}
+                          : `${subject.lecturer || 'No lecturer set'} · ${slotCount} slot${slotCount === 1 ? '' : 's'}`}
                     </div>
+                    {!calendar && (
+                      <p className="tabular mt-1 truncate text-xs text-zinc-500">
+                        <span className="font-medium text-zinc-800">
+                          {formatDuration(studyBySubject.get(subject.id)?.totalMs ?? 0)}
+                        </span>{' '}
+                        total
+                        <span className="text-zinc-300"> · </span>
+                        <span className="font-medium text-zinc-800">
+                          {formatDuration(studyBySubject.get(subject.id)?.avgPerWeekMs ?? 0)}
+                        </span>{' '}
+                        avg / week
+                      </p>
+                    )}
                   </div>
                   {!calendar && (
                     <span className="tabular text-sm font-semibold text-zinc-900">{Math.round(stats.ratio * 100)}%</span>

@@ -25,25 +25,40 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
   const [focus, setFocus] = useState({ row: 0, col: selectedWeek - 1 })
 
   const weekly = subjects.filter((s) => s.onceWeek == null && !s.calendarOnly)
-  const rows = weekly.flatMap((s) => s.categories.map((c) => ({ subject: s, category: c })))
+  const rows = weekly.flatMap((s) => [
+    ...s.categories.map((category) => ({ subject: s, category, onlyWeek: null as number | null })),
+    ...(s.events ?? [])
+      .filter((event) => event.name)
+      .map((event) => ({ subject: s, category: event.name, onlyWeek: event.week })),
+  ])
   const rowCount = rows.length
   const activeRow = Math.min(focus.row, Math.max(0, rowCount - 1))
 
-  const moveFocus = (row: number, col: number) => {
-    const r = Math.max(0, Math.min(rowCount - 1, row))
-    const c = Math.max(0, Math.min(weekCount - 1, col))
-    setFocus({ row: r, col: c })
-    tableRef.current?.querySelector<HTMLElement>(`[data-row="${r}"][data-col="${c}"]`)?.focus()
+  const moveFocus = (row: number, col: number, dRow = 0, dCol = 0) => {
+    let r = row
+    let c = col
+    for (let i = 0; i < rowCount + weekCount; i++) {
+      if (r < 0 || c < 0 || r > rowCount - 1 || c > weekCount - 1) return
+      const el = tableRef.current?.querySelector<HTMLElement>(`[data-row="${r}"][data-col="${c}"]`)
+      if (el) {
+        setFocus({ row: r, col: c })
+        el.focus()
+        return
+      }
+      if (!dRow && !dCol) return
+      r += dRow
+      c += dCol
+    }
   }
 
   const onCellKeyDown = (row: number, col: number) => (e: KeyboardEvent<HTMLButtonElement>) => {
-    const moves: Record<string, [number, number]> = {
-      ArrowUp: [row - 1, col],
-      ArrowDown: [row + 1, col],
-      ArrowLeft: [row, col - 1],
-      ArrowRight: [row, col + 1],
-      Home: [row, 0],
-      End: [row, weekCount - 1],
+    const moves: Record<string, [number, number, number, number]> = {
+      ArrowUp: [row - 1, col, -1, 0],
+      ArrowDown: [row + 1, col, 1, 0],
+      ArrowLeft: [row, col - 1, 0, -1],
+      ArrowRight: [row, col + 1, 0, 1],
+      Home: [row, 0, 0, 1],
+      End: [row, weekCount - 1, 0, -1],
     }
     const target = moves[e.key]
     if (!target) return
@@ -152,12 +167,17 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
                     />
                   ))}
                 </tr>
-                {subject.categories.map((category, ci) => {
+                {[
+                  ...subject.categories.map((category) => ({ category, onlyWeek: null as number | null })),
+                  ...(subject.events ?? [])
+                    .filter((event) => event.name)
+                    .map((event) => ({ category: event.name, onlyWeek: event.week })),
+                ].map(({ category, onlyWeek }, ci, list) => {
                   rowIndex++
                   const r = rowIndex
-                  const last = ci === subject.categories.length - 1
+                  const last = ci === list.length - 1
                   return (
-                    <tr key={category}>
+                    <tr key={onlyWeek == null ? category : `${category}-${onlyWeek}`}>
                       <th
                         scope="row"
                         className={cn(
@@ -166,9 +186,11 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
                         )}
                       >
                         {category}
+                        {onlyWeek != null && <span className="ml-1.5 text-xs text-zinc-400">W{onlyWeek}</span>}
                       </th>
                       {weeks.map((w) => {
                         const c = w - 1
+                        const applies = onlyWeek == null || onlyWeek === w
                         return (
                           <td
                             key={w}
@@ -178,17 +200,19 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
                               w === selectedWeek && 'bg-zinc-100',
                             )}
                           >
-                            <div className="flex justify-center">
-                              <ProgressCell
-                                state={getProgress(subject, w, category)}
-                                onChange={(next) => setProgress(subject.id, w, category, next)}
-                                context={`${subject.name}, ${category}, week ${w}`}
-                                highlighted={w === selectedWeek}
-                                tabIndex={r === activeRow && c === focus.col ? 0 : -1}
-                                onKeyDown={onCellKeyDown(r, c)}
-                                dataAttrs={{ 'data-row': r, 'data-col': c }}
-                              />
-                            </div>
+                            {applies && (
+                              <div className="flex justify-center">
+                                <ProgressCell
+                                  state={getProgress(subject, w, category)}
+                                  onChange={(next) => setProgress(subject.id, w, category, next)}
+                                  context={`${subject.name}, ${category}, week ${w}`}
+                                  highlighted={w === selectedWeek}
+                                  tabIndex={r === activeRow && c === focus.col ? 0 : -1}
+                                  onKeyDown={onCellKeyDown(r, c)}
+                                  dataAttrs={{ 'data-row': r, 'data-col': c }}
+                                />
+                              </div>
+                            )}
                           </td>
                         )
                       })}

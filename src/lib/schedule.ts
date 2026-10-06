@@ -1,11 +1,26 @@
 import { DAYS, WEEKEND_DAYS, type Day, type ScheduleSlot, type SlotType, type Subject } from '../types'
 import { parseTimeRange } from './semester'
-import { occursInWeek } from './subjects'
+import { eventForSlot, occursInWeek, slotsInWeek } from './subjects'
 
 export const SLOT_LABEL: Record<SlotType, string> = {
   lecture: 'Lecture',
   exercise: 'Exercise',
   summary: 'Summary',
+}
+
+/** "Lecture" for the built-in ids, otherwise the label as typed. */
+export function slotLabel(type: string): string {
+  return SLOT_LABEL[type as SlotType] ?? type
+}
+
+/** Empty becomes Lecture. "Lecture" is stored as the built-in id. */
+export function normalizeSlotType(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return 'lecture'
+  const known = (Object.entries(SLOT_LABEL) as [SlotType, string][]).find(
+    ([, label]) => label.toLowerCase() === trimmed.toLowerCase(),
+  )
+  return known ? known[0] : trimmed
 }
 
 export const DAY_LABEL: Record<Day, string> = {
@@ -19,8 +34,14 @@ export const DAY_LABEL: Record<Day, string> = {
 }
 
 /** The progress category a slot contributes to, matched loosely ("Exercises" ~ exercise). */
-export function categoryForSlot(subject: Subject, type: SlotType): string | null {
-  return subject.categories.find((c) => c.toLowerCase().startsWith(type.slice(0, 5))) ?? null
+export function categoryForSlot(subject: Subject, type: string, slotId?: string): string | null {
+  if (slotId) {
+    const event = eventForSlot(subject, slotId)
+    if (event?.name) return event.name
+  }
+  const key = type.trim().toLowerCase()
+  if (!key) return null
+  return subject.categories.find((c) => c.toLowerCase().startsWith(key.slice(0, 5))) ?? null
 }
 
 export interface PlacedSlot {
@@ -82,7 +103,13 @@ const startMinutes = (slot: ScheduleSlot) => parseTimeRange(slot.time)?.start ??
 export function slotsForDay(subjects: Subject[], day: Day, week?: number): PlacedSlot[] {
   return subjects
     .filter((subject) => week == null || occursInWeek(subject, week))
-    .flatMap((subject) => subject.scheduleSlots.filter((s) => s.day === day).map((slot) => ({ subject, slot })))
+    .flatMap((subject) => {
+      const slots =
+        week == null
+          ? [...subject.scheduleSlots, ...(subject.events ?? []).flatMap((event) => event.slots)]
+          : slotsInWeek(subject, week)
+      return slots.filter((slot) => slot.day === day).map((slot) => ({ subject, slot }))
+    })
     .sort((a, b) => startMinutes(a.slot) - startMinutes(b.slot))
 }
 
@@ -98,7 +125,10 @@ export function timetableDays(subjects: Subject[], week?: number): Day[] {
       subjects.some(
         (subject) =>
           (week == null || occursInWeek(subject, week)) &&
-          subject.scheduleSlots.some((slot) => slot.day === day),
+          (week == null
+            ? [...subject.scheduleSlots, ...(subject.events ?? []).flatMap((event) => event.slots)]
+            : slotsInWeek(subject, week)
+          ).some((slot) => slot.day === day),
       ),
   )
 }

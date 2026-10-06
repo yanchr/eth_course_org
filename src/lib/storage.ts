@@ -1,7 +1,6 @@
 import {
   DAYS,
   DEFAULT_CATEGORIES,
-  SLOT_TYPES,
   WEEK_COUNT,
   type ActiveStudy,
   type PlannerData,
@@ -9,6 +8,7 @@ import {
   type ScheduleSlot,
   type StudySession,
   type Subject,
+  type SubjectEvent,
   type SubjectLink,
 } from '../types'
 import { createId } from './id'
@@ -30,6 +30,8 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback)
 const PROGRESS_STATES: ProgressState[] = ['pending', 'completed', 'canceled']
+const isWeek = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= WEEK_COUNT
 
 function parseLink(raw: unknown): SubjectLink | null {
   if (!isObject(raw)) return null
@@ -40,10 +42,23 @@ function parseLink(raw: unknown): SubjectLink | null {
 
 function parseSlot(raw: unknown): ScheduleSlot | null {
   if (!isObject(raw)) return null
-  const type = SLOT_TYPES.find((t) => t === raw.type)
+  const type = str(raw.type).trim() || 'lecture'
   const day = DAYS.find((d) => d === raw.day)
-  if (!type || !day) return null
+  if (!day) return null
   return { id: str(raw.id) || createId(), type, day, time: str(raw.time), room: str(raw.room) }
+}
+
+function parseEvent(raw: unknown): SubjectEvent | null {
+  if (!isObject(raw)) return null
+  const name = str(raw.name).trim()
+  if (!name || !isWeek(raw.week)) return null
+  return {
+    id: str(raw.id) || createId(),
+    name,
+    week: raw.week,
+    slots: Array.isArray(raw.slots) ? raw.slots.map(parseSlot).filter((s) => s !== null) : [],
+    links: Array.isArray(raw.links) ? raw.links.map(parseLink).filter((l) => l !== null) : [],
+  }
 }
 
 function parseSubject(raw: unknown): Subject | null {
@@ -64,6 +79,7 @@ function parseSubject(raw: unknown): Subject | null {
   }
 
   const calendarOnly = raw.calendarOnly === true
+  const events = Array.isArray(raw.events) ? raw.events.map(parseEvent).filter((e) => e !== null) : []
 
   return {
     id: str(raw.id) || createId(),
@@ -75,6 +91,7 @@ function parseSubject(raw: unknown): Subject | null {
       : [],
     categories: calendarOnly ? categories : categories.length ? categories : [...DEFAULT_CATEGORIES],
     progress,
+    ...(events.length > 0 ? { events } : {}),
     ...(typeof raw.onceWeek === 'number' &&
     Number.isInteger(raw.onceWeek) &&
     raw.onceWeek >= 1 &&
@@ -85,8 +102,6 @@ function parseSubject(raw: unknown): Subject | null {
   }
 }
 
-const isWeek = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= WEEK_COUNT
 const isDuration = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const stringList = (v: unknown): string[] =>
   Array.isArray(v) ? [...new Set(v.filter((c): c is string => typeof c === 'string' && c !== ''))] : []
@@ -95,13 +110,18 @@ function parseStudySession(raw: unknown): StudySession | null {
   if (!isObject(raw)) return null
   const subjectId = str(raw.subjectId)
   if (!subjectId || !isWeek(raw.week) || !isDuration(raw.durationMs)) return null
+  const endedMs = Date.parse(str(raw.endedAt))
+  const end = Number.isNaN(endedMs) ? Date.now() : endedMs
+  const startedMs = Date.parse(str(raw.startedAt))
+  const start = Number.isNaN(startedMs) || startedMs > end ? end - raw.durationMs : startedMs
   return {
     id: str(raw.id) || createId(),
     subjectId,
     week: raw.week,
     categories: stringList(raw.categories),
     durationMs: raw.durationMs,
-    endedAt: str(raw.endedAt),
+    startedAt: new Date(start).toISOString(),
+    endedAt: new Date(end).toISOString(),
   }
 }
 
@@ -109,12 +129,15 @@ function parseActiveStudy(raw: unknown): ActiveStudy | null {
   if (!isObject(raw)) return null
   const subjectId = str(raw.subjectId)
   if (!subjectId || !isWeek(raw.week)) return null
+  const accumulatedMs = isDuration(raw.accumulatedMs) ? raw.accumulatedMs : 0
+  const resumedAt = isDuration(raw.resumedAt) ? raw.resumedAt : null
   return {
     subjectId,
     week: raw.week,
     categories: stringList(raw.categories),
-    accumulatedMs: isDuration(raw.accumulatedMs) ? raw.accumulatedMs : 0,
-    resumedAt: isDuration(raw.resumedAt) ? raw.resumedAt : null,
+    startedAt: isDuration(raw.startedAt) ? raw.startedAt : (resumedAt ?? Date.now()) - accumulatedMs,
+    accumulatedMs,
+    resumedAt,
   }
 }
 

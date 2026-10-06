@@ -3,15 +3,16 @@ import { Plus, Trash2, X } from 'lucide-react'
 import {
   DAYS,
   DEFAULT_CATEGORIES,
-  SLOT_TYPES,
   type ScheduleSlot,
   type Subject,
+  type SubjectEvent,
   type SubjectLink,
 } from '../types'
 import { createId } from '../lib/id'
-import { createCalendarItem, createEvent, createSubject } from '../lib/subjects'
+import { progressKey } from '../lib/progress'
+import { createCalendarItem, createEvent, createSubject, isCalendar, isOnce, withEvent } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
-import { DAY_LABEL, SLOT_LABEL } from '../lib/schedule'
+import { DAY_LABEL, normalizeSlotType, slotLabel } from '../lib/schedule'
 import { normalizeTimeRange } from '../lib/semester'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { Sheet } from './ui/Sheet'
@@ -88,11 +89,13 @@ interface EditorFormProps {
 }
 
 function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }: EditorFormProps) {
-  const { settings } = usePlanner()
+  const { settings, subjects } = usePlanner()
   const [draft, setDraft] = useState<Subject>(initial)
   const [newCategory, setNewCategory] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [nameError, setNameError] = useState(false)
+  const [nameError, setNameError] = useState<string | null>(null)
+  const [parentId, setParentId] = useState('')
+  const attachTargets = subjects.filter((s) => !isOnce(s) && !isCalendar(s))
 
   const once = draft.onceWeek != null
   const calendar = draft.calendarOnly === true
@@ -104,6 +107,7 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
     patch({ links: draft.links.map((l) => (l.id === id ? { ...l, ...p } : l)) })
 
   const setKind = (kind: 'weekly' | 'once') => {
+    if (kind === 'weekly') setParentId('')
     if (kind === 'once') {
       patch({
         onceWeek: draft.onceWeek ?? defaultWeek,
@@ -127,6 +131,7 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
 
   const setTrack = (track: 'todo' | 'calendar') => {
     if (track === 'calendar') {
+      setParentId('')
       patch({ calendarOnly: true, categories: [] })
       return
     }
@@ -143,11 +148,45 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
     setNewCategory('')
   }
 
+  const removeEvent = (event: SubjectEvent) => {
+    const progress = { ...draft.progress }
+    delete progress[progressKey(event.week, event.name)]
+    const events = (draft.events ?? []).filter((item) => item.id !== event.id)
+    patch({ events: events.length > 0 ? events : undefined, progress })
+  }
+
   const submit = (e: FormEvent) => {
     e.preventDefault()
     const name = draft.name.trim()
     if (!name) {
-      setNameError(true)
+      setNameError('A name is required.')
+      return
+    }
+    const parent = parentId ? attachTargets.find((s) => s.id === parentId) : undefined
+    if (parent && once && !calendar) {
+      const taken =
+        parent.categories.some((c) => c.toLowerCase() === name.toLowerCase()) ||
+        (parent.events ?? []).some((event) => event.week === draft.onceWeek && event.name.toLowerCase() === name.toLowerCase())
+      if (taken) {
+        setNameError(`${parent.name} already has a to-do named ${name} in this week.`)
+        return
+      }
+      const slots = draft.scheduleSlots
+        .map((s) => ({ ...s, time: s.time.trim(), room: s.room.trim() }))
+        .filter((s) => s.time || s.room)
+      const links = draft.links
+        .map((l) => ({ ...l, url: normalizeUrl(l.url), label: l.label.trim() }))
+        .filter((l) => l.url)
+        .map((l) => ({ ...l, label: l.label || l.url }))
+      onSave(
+        withEvent(parent, {
+          id: createId(),
+          name,
+          week: draft.onceWeek ?? defaultWeek,
+          slots,
+          links,
+        }),
+      )
       return
     }
     onSave({
@@ -168,31 +207,34 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
         .filter((l) => l.url)
         .map((l) => ({ ...l, label: l.label || l.url })),
       scheduleSlots: draft.scheduleSlots.map((s) => ({ ...s, time: s.time.trim(), room: s.room.trim() })),
+      events: draft.events?.length ? draft.events : undefined,
     })
   }
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-7">
       <div className="flex flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className={cn('grid gap-4', parentId ? '' : 'sm:grid-cols-2')}>
           <Field
             label="Name"
             value={draft.name}
             onChange={(e) => {
               patch({ name: e.target.value })
-              setNameError(false)
+              setNameError(null)
             }}
             placeholder={calendar ? 'e.g. Gym' : once ? 'e.g. Midterm' : 'e.g. Informatik'}
             data-autofocus
-            aria-invalid={nameError}
-            hint={nameError ? <span className="text-red-600">A name is required.</span> : undefined}
+            aria-invalid={nameError !== null}
+            hint={nameError ? <span className="text-red-600">{nameError}</span> : undefined}
           />
-          <Field
-            label={calendar ? 'Note' : once ? 'Host' : 'Lecturer'}
-            value={draft.lecturer}
-            onChange={(e) => patch({ lecturer: e.target.value })}
-            placeholder={calendar || once ? 'Optional' : 'e.g. Prof. Dr. Muster'}
-          />
+          {!parentId && (
+            <Field
+              label={calendar ? 'Note' : once ? 'Host' : 'Lecturer'}
+              value={draft.lecturer}
+              onChange={(e) => patch({ lecturer: e.target.value })}
+              placeholder={calendar || once ? 'Optional' : 'e.g. Prof. Dr. Muster'}
+            />
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
@@ -214,7 +256,7 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
       </div>
 
       {once && (
-        <Section title="Week" description="This only appears in the week you pick.">
+        <Section title="Week" description={parentId ? 'The to-do is only added in this week.' : 'This only appears in the week you pick.'}>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Week">
             {Array.from({ length: settings.weekCount }, (_, i) => {
               const w = i + 1
@@ -230,6 +272,55 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
               )
             })}
           </div>
+        </Section>
+      )}
+
+      {once && !calendar && isNew && attachTargets.length > 0 && (
+        <Section
+          title="Subject"
+          description="Optional. The name becomes one to-do on that subject, only in the week you pick."
+        >
+          <select
+            className={inputClass}
+            value={parentId}
+            aria-label="Add to subject"
+            onChange={(e) => setParentId(e.target.value)}
+          >
+            <option value="">No subject — keep it separate</option>
+            {attachTargets.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </Section>
+      )}
+
+      {!once && !calendar && (draft.events ?? []).some((event) => event.name) && (
+        <Section title="Single to-dos" description="Added from an event. Each one only counts in its week.">
+          <ul className="flex flex-col gap-2">
+            {(draft.events ?? [])
+              .filter((event) => event.name)
+              .map((event) => (
+                <li
+                  key={event.id}
+                  className="flex min-h-11 items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-3 py-2"
+                >
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-900">
+                    {event.name}
+                    <span className="font-normal text-zinc-400"> · week {event.week}</span>
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${event.name}`}
+                    onClick={() => removeEvent(event)}
+                    className="flex size-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+          </ul>
         </Section>
       )}
 
@@ -289,22 +380,18 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
             const loc = parseRoom(slot.room)
             return (
               <li key={slot.id} className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-zinc-50/50 p-3">
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex items-end gap-2">
                   {!once && !calendar ? (
-                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Slot type">
-                      {SLOT_TYPES.map((t) => (
-                        <Pill
-                          key={t}
-                          active={slot.type === t}
-                          onClick={() => patchSlot(slot.id, { type: t })}
-                          className="max-sm:h-11"
-                        >
-                          {SLOT_LABEL[t]}
-                        </Pill>
-                      ))}
-                    </div>
+                    <Field
+                      label="Type"
+                      value={slotLabel(slot.type)}
+                      onChange={(e) => patchSlot(slot.id, { type: e.target.value })}
+                      onBlur={(e) => patchSlot(slot.id, { type: normalizeSlotType(e.target.value) })}
+                      placeholder="Lecture"
+                      className="min-w-0 flex-1"
+                    />
                   ) : (
-                    <span className="text-sm font-medium text-zinc-500">When</span>
+                    <span className="flex h-11 flex-1 items-center text-sm font-medium text-zinc-500">When</span>
                   )}
                   <IconButton
                     label="Remove slot"
@@ -426,7 +513,15 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
             Cancel
           </Button>
           <Button type="submit" variant="primary" className="flex-1 sm:flex-none">
-            {isNew ? (calendar ? 'Add to calendar' : once ? 'Create event' : 'Create subject') : 'Save changes'}
+            {isNew
+              ? calendar
+                ? 'Add to calendar'
+                : once
+                  ? parentId
+                    ? 'Add to subject'
+                    : 'Create event'
+                  : 'Create subject'
+              : 'Save changes'}
           </Button>
         </div>
       </div>

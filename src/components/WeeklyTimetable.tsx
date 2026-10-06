@@ -3,9 +3,9 @@ import { Check, MapPin } from 'lucide-react'
 import { DAYS, WEEKEND_DAYS, type Day, type Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { dateForDay, formatMinutes, parseTimeRange, todayDay } from '../lib/semester'
-import { categoryForSlot, DAY_LABEL, layoutDaySlots, SLOT_LABEL, slotsForDay } from '../lib/schedule'
+import { categoryForSlot, DAY_LABEL, layoutDaySlots, slotLabel, slotsForDay } from '../lib/schedule'
 import { getProgress, isWeekDone, weekStats } from '../lib/progress'
-import { isCalendar, isOnce, occursInWeek } from '../lib/subjects'
+import { eventForSlot, isCalendar, isOnce, occursInWeek, slotsInWeek } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { cn } from '../lib/cn'
 
@@ -15,6 +15,8 @@ interface WeeklyTimetableProps {
   onOpen: (subject: Subject, slotId?: string) => void
   /** 2 = phone pager (today + tomorrow, swipe). 7 = full week. */
   daysVisible?: 2 | 7
+  /** Swipe past Sunday, or back from Monday, moves the selected week. */
+  onWeekChange?: (week: number) => void
 }
 
 const DEFAULT_START = 8 * 60
@@ -61,8 +63,130 @@ function useFitHourPx(ref: RefObject<HTMLDivElement | null>, reservedPx: number)
   return px
 }
 
-export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }: WeeklyTimetableProps) {
+type WeekEdge = 'start' | 'end'
+
+/**
+ * A sideways swipe changes week only from the edge of the current one.
+ * `days` treats Sunday as the end of a day pager. `scroll` treats the
+ * scrollport: a week that already fits counts as both edges, so any
+ * sideways swipe moves to the next or previous week.
+ */
+function useWeekEdgeSwipe(
+  ref: RefObject<HTMLElement | null>,
+  opts: {
+    enabled: boolean
+    mode: 'days' | 'scroll'
+    week: number
+    weekCount: number
+    onWeekChange?: (week: number, edge: WeekEdge) => void
+  },
+) {
+  const optsRef = useRef(opts)
+  optsRef.current = opts
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !opts.enabled) return
+
+    let tracking = false
+    let startX = 0
+    let startY = 0
+    let startScroll = 0
+    let lockedUntil = 0
+    let consumed = false
+
+    const dayIndex = (scrollLeft: number) => {
+      const dayW = el.clientWidth / PEEK
+      if (dayW <= 0) return 0
+      return Math.round(scrollLeft / dayW)
+    }
+
+    const atEdge = (scrollLeft: number) => {
+      if (optsRef.current.mode === 'days') {
+        const index = dayIndex(scrollLeft)
+        return { atStart: index <= 0, atEnd: index >= DAYS.length - 1 }
+      }
+      const max = el.scrollWidth - el.clientWidth
+      return { atStart: max <= 2 || scrollLeft <= 2, atEnd: max <= 2 || scrollLeft >= max - 2 }
+    }
+
+    const go = (dir: 1 | -1) => {
+      const { week, weekCount, onWeekChange } = optsRef.current
+      if (!onWeekChange || Date.now() < lockedUntil) return
+      const next = week + dir
+      if (next < 1 || next > weekCount) return
+      lockedUntil = Date.now() + 600
+      consumed = true
+      onWeekChange(next, dir > 0 ? 'start' : 'end')
+    }
+
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return
+      tracking = true
+      consumed = false
+      startX = e.clientX
+      startY = e.clientY
+      startScroll = el.scrollLeft
+    }
+
+    const onUp = (e: PointerEvent) => {
+      if (!tracking || e.pointerType !== 'touch') return
+      tracking = false
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy)) return
+      const { atStart, atEnd } = atEdge(startScroll)
+      if (dx < 0 && atEnd) go(1)
+      else if (dx > 0 && atStart) go(-1)
+    }
+
+    const onCancel = () => {
+      tracking = false
+    }
+
+    const onClick = (e: Event) => {
+      if (!consumed) return
+      consumed = false
+      e.preventDefault()
+      e.stopPropagation()
+    }
+
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaX) < 24 || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+      const { atStart, atEnd } = atEdge(el.scrollLeft)
+      if (e.deltaX > 0 && atEnd) {
+        e.preventDefault()
+        go(1)
+      } else if (e.deltaX < 0 && atStart) {
+        e.preventDefault()
+        go(-1)
+      }
+    }
+
+    el.addEventListener('pointerdown', onDown)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    el.addEventListener('click', onClick, true)
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      el.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      el.removeEventListener('click', onClick, true)
+      el.removeEventListener('wheel', onWheel)
+    }
+  }, [ref, opts.enabled, opts.mode])
+}
+
+export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, onWeekChange }: WeeklyTimetableProps) {
   const { subjects, settings } = usePlanner()
+  const { weekCount } = settings
+  const land = useRef<WeekEdge | null>(null)
+  const requestWeek = (next: number, edge: WeekEdge) => {
+    if (!onWeekChange || next < 1 || next > weekCount || next === week) return
+    land.current = edge
+    onWeekChange(next)
+  }
   const today = isCurrentWeek ? todayDay() : null
   const now = useMinutesNow(isCurrentWeek)
   const pager = daysVisible === 2
@@ -73,13 +197,17 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
   const hourPx = useFitHourPx(frameRef, HEADER_H)
 
   const weekSubjects = subjects.filter((s) => occursInWeek(s, week))
-  const ranges = weekSubjects.flatMap((s) => s.scheduleSlots.map((slot) => parseTimeRange(slot.time))).filter((r) => r !== null)
+  const ranges = weekSubjects
+    .flatMap((s) => slotsInWeek(s, week).map((slot) => parseTimeRange(slot.time)))
+    .filter((r) => r !== null)
   const startMin = Math.floor(Math.min(DEFAULT_START, ...ranges.map((r) => r.start)) / 60) * 60
   const endMin = Math.ceil(Math.max(DEFAULT_END, ...ranges.map((r) => r.end)) / 60) * 60
   const hours = Array.from({ length: (endMin - startMin) / 60 }, (_, i) => startMin + i * 60)
   const height = ((endMin - startMin) / 60) * hourPx
   const unscheduled = weekSubjects.flatMap((subject) =>
-    subject.scheduleSlots.filter((slot) => !parseTimeRange(slot.time)).map((slot) => ({ subject, slot })),
+    slotsInWeek(subject, week)
+      .filter((slot) => !parseTimeRange(slot.time))
+      .map((slot) => ({ subject, slot })),
   )
   const nowTop = now !== null ? ((now - startMin) / 60) * hourPx : null
   const showNow = nowTop !== null && now !== null && now >= startMin && now <= endMin
@@ -100,9 +228,21 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     const el = scrollerRef.current
     if (!pager || !el) return
     const dayW = el.clientWidth / PEEK
-    el.scrollLeft = startIndex * dayW
+    const where = land.current
+    land.current = null
+    if (where === 'end') el.scrollLeft = (DAYS.length - 1) * dayW
+    else if (where === 'start') el.scrollLeft = 0
+    else el.scrollLeft = startIndex * dayW
     syncHeader()
   }, [pager, week, startIndex])
+
+  useWeekEdgeSwipe(pager ? scrollerRef : verticalRef, {
+    enabled: onWeekChange != null,
+    mode: pager ? 'days' : 'scroll',
+    week,
+    weekCount,
+    onWeekChange: requestWeek,
+  })
 
   useLayoutEffect(() => {
     const el = verticalRef.current
@@ -118,12 +258,15 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     const el = scrollerRef.current
     if (!el) return
     const dayW = el.clientWidth / PEEK
+    const index = Math.round(el.scrollLeft / dayW)
     if (e.key === 'ArrowRight') {
       e.preventDefault()
-      el.scrollBy({ left: dayW, behavior: 'smooth' })
+      if (index >= DAYS.length - 1) requestWeek(week + 1, 'start')
+      else el.scrollBy({ left: dayW, behavior: 'smooth' })
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      el.scrollBy({ left: -dayW, behavior: 'smooth' })
+      if (index <= 0) requestWeek(week - 1, 'end')
+      else el.scrollBy({ left: -dayW, behavior: 'smooth' })
     } else if (e.key === 'Home') {
       e.preventDefault()
       el.scrollTo({ left: 0, behavior: 'smooth' })
@@ -161,7 +304,7 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
   if (pager) {
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-2" onKeyDown={onKeyDown}>
-        <p className="shrink-0 px-1 text-xs text-zinc-500">Swipe to see other days</p>
+        <p className="shrink-0 px-1 text-xs text-zinc-500">Swipe days · past Sunday opens the next week</p>
         <div ref={frameRef} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
           <div className="flex shrink-0 border-b border-zinc-100">
             <div className="shrink-0 border-r border-zinc-100 bg-white" style={{ width: GUTTER }} />
@@ -208,7 +351,7 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
                 ref={scrollerRef}
                 tabIndex={0}
                 role="region"
-                aria-label="Week schedule, two days at a time. Swipe or use arrow keys for other days."
+                aria-label="Week schedule, two days at a time. Swipe or use arrow keys. Past Sunday opens the next week, before Monday the previous week."
                 onScroll={syncHeader}
                 className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain outline-none"
               >
@@ -230,6 +373,8 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7 }
     <div ref={frameRef} className="flex min-h-0 flex-1 flex-col">
       <div
         ref={verticalRef}
+        role="region"
+        aria-label="Week schedule. Swipe left past Sunday for the next week, swipe right before Monday for the previous week."
         className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-zinc-200 bg-white shadow-xs"
       >
         <div className="min-w-[44rem]">
@@ -468,14 +613,21 @@ function DayBody({
         const top = ((start - startMin) / 60) * hourPx
         const blockHeight = Math.max(((end - start) / 60) * hourPx - 2, 26)
         const calendar = isCalendar(subject)
-        const category = categoryForSlot(subject, slot.type)
+        const attached = eventForSlot(subject, slot.id)
+        const category = attached?.name ?? categoryForSlot(subject, slot.type, slot.id)
         const state = !calendar && category ? getProgress(subject, week, category) : 'pending'
         const stats = weekStats(subject, week)
         const done = !calendar && isWeekDone(subject, week)
         const ratio = calendar ? 0 : done ? 1 : stats.ratio
         const loc = parseRoom(slot.room)
         const inset = 3
-        const kind = calendar ? 'calendar' : isOnce(subject) ? 'Once' : SLOT_LABEL[slot.type]
+        const kind = attached
+          ? attached.name
+          : calendar
+            ? 'calendar'
+            : isOnce(subject)
+              ? 'Once'
+              : slotLabel(slot.type)
         const face = (
           <EventFace
             name={subject.name}
@@ -496,7 +648,7 @@ function DayBody({
             aria-label={
               calendar
                 ? `${subject.name}, ${DAY_LABEL[day]} ${slot.time}${slot.room ? `, ${slot.room}` : ''}`
-                : `${subject.name} ${isOnce(subject) ? 'once' : SLOT_LABEL[slot.type]}, ${DAY_LABEL[day]} ${slot.time}${slot.room ? `, ${slot.room}` : ''}, ${stats.completed} of ${stats.total - stats.canceled} done this week`
+                : `${subject.name} ${isOnce(subject) ? 'once' : slotLabel(slot.type)}, ${DAY_LABEL[day]} ${slot.time}${slot.room ? `, ${slot.room}` : ''}, ${stats.completed} of ${stats.total - stats.canceled} done this week`
             }
             className={cn(
               'absolute overflow-hidden rounded-md border text-left',

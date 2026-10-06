@@ -91,6 +91,60 @@ export function studyStats(sessions: StudySession[]): StudyStats {
   }
 }
 
+export function taskAverageKey(subjectId: string, category: string): string {
+  return `${subjectId}\0${category}`
+}
+
+/** Mean recorded time for each todo, over the weeks that have time logged for it. */
+export function taskAverages(sessions: StudySession[]): Map<string, number> {
+  const grouped = new Map<string, { sum: number; weeks: number }>()
+  for (const task of studyStats(sessions).tasks) {
+    const key = taskAverageKey(task.subjectId, task.category)
+    const group = grouped.get(key)
+    if (group) {
+      group.sum += task.ms
+      group.weeks += 1
+    } else grouped.set(key, { sum: task.ms, weeks: 1 })
+  }
+  const averages = new Map<string, number>()
+  for (const [key, group] of grouped) averages.set(key, group.sum / group.weeks)
+  return averages
+}
+
+/** "14:05" in local time, the value format of `<input type="time">`. */
+export function toTimeInput(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+/** Local Date from a YYYY-MM-DD day and an HH:MM time; null if either is unreadable. */
+export function combineDateTime(day: string, time: string): Date | null {
+  const d = day.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const t = time.match(/^(\d{2}):(\d{2})/)
+  if (!d || !t) return null
+  return new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]))
+}
+
+/**
+ * Start and end of a from–to entry on one day. An end at or before the start is read as
+ * running past midnight into the next day.
+ */
+export function timeSpan(day: string, from: string, to: string): { start: Date; end: Date } | null {
+  const start = combineDateTime(day, from)
+  const end = combineDateTime(day, to)
+  if (!start || !end) return null
+  if (end <= start) end.setDate(end.getDate() + 1)
+  return { start, end }
+}
+
+/** "Mon 05.10 · 14:05–15:20" */
+export function formatSessionSpan(startedAt: string, endedAt: string): string {
+  const start = new Date(startedAt)
+  const end = new Date(endedAt)
+  const day = start.toLocaleDateString('en-GB', { weekday: 'short' })
+  const date = `${String(start.getDate()).padStart(2, '0')}.${String(start.getMonth() + 1).padStart(2, '0')}`
+  return `${day} ${date} · ${toTimeInput(start)}–${toTimeInput(end)}`
+}
+
 /** "1h 12m", "8m", "<1m" */
 export function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000)

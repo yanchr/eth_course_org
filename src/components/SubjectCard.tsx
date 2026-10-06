@@ -1,10 +1,12 @@
+import { useMemo } from 'react'
 import { ChevronRight, MapPin } from 'lucide-react'
 import type { Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { getProgress, isWeekDone, weekStats } from '../lib/progress'
-import { isOnce } from '../lib/subjects'
+import { categoriesInWeek, eventForSlot, isOnce, slotsInWeek } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
-import { SLOT_LABEL, sortSlots } from '../lib/schedule'
+import { slotLabel, sortSlots } from '../lib/schedule'
+import { formatDuration, taskAverageKey, taskAverages } from '../lib/study'
 import { CampusBadge } from './CampusBadge'
 import { ProgressCell } from './ProgressCell'
 import { cn } from '../lib/cn'
@@ -16,9 +18,11 @@ interface SubjectCardProps {
 }
 
 export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
-  const { setProgress } = usePlanner()
+  const { setProgress, data } = usePlanner()
+  const averages = useMemo(() => taskAverages(data.studySessions), [data.studySessions])
   const stats = weekStats(subject, week)
-  const slots = sortSlots(subject.scheduleSlots)
+  const slots = sortSlots(slotsInWeek(subject, week))
+  const categories = categoriesInWeek(subject, week)
   const done = isWeekDone(subject, week)
 
   return (
@@ -53,19 +57,23 @@ export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
       <div
         className={cn(
           'grid gap-2 px-4 pb-4',
-          subject.categories.length <= 1 ? 'grid-cols-1' : subject.categories.length === 2 ? 'grid-cols-2' : 'grid-cols-3',
+          categories.length <= 1 ? 'grid-cols-1' : categories.length === 2 ? 'grid-cols-2' : 'grid-cols-3',
         )}
       >
-        {subject.categories.map((category) => (
-          <ProgressCell
-            key={category}
-            variant="card"
-            label={category}
-            state={getProgress(subject, week, category)}
-            onChange={(next) => setProgress(subject.id, week, category, next)}
-            context={`${subject.name}, ${category}, week ${week}`}
-          />
-        ))}
+        {categories.map((category) => {
+          const averageMs = averages.get(taskAverageKey(subject.id, category))
+          return (
+            <ProgressCell
+              key={category}
+              variant="card"
+              label={category}
+              averageLabel={averageMs ? formatDuration(averageMs) : undefined}
+              state={getProgress(subject, week, category)}
+              onChange={(next) => setProgress(subject.id, week, category, next)}
+              context={`${subject.name}, ${category}, week ${week}`}
+            />
+          )
+        })}
       </div>
 
       {slots.length > 0 && (
@@ -81,7 +89,9 @@ export function SubjectCard({ subject, week, onOpen }: SubjectCardProps) {
                 >
                   <span className="flex w-16 shrink-0 flex-col leading-tight">
                     <span className="text-xs font-semibold text-zinc-900">{slot.day}</span>
-                    <span className="text-[11px] text-zinc-400">{isOnce(subject) ? 'Once' : SLOT_LABEL[slot.type]}</span>
+                    <span className="truncate text-[11px] text-zinc-400">
+                      {eventForSlot(subject, slot.id)?.name ?? (isOnce(subject) ? 'Once' : slotLabel(slot.type))}
+                    </span>
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col leading-tight">
                     <span className="tabular truncate text-zinc-700">{slot.time || '—'}</span>

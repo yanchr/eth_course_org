@@ -1,11 +1,24 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { Pause, Play, Square, Timer } from 'lucide-react'
+import { useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { ChevronRight, History, Pause, Pencil, Play, Square, Timer } from 'lucide-react'
+import type { StudySession } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { useNow } from '../hooks/useNow'
-import { activeElapsedMs, formatClock, formatDuration, studyStats, type WeekTime } from '../lib/study'
+import {
+  activeElapsedMs,
+  combineDateTime,
+  formatClock,
+  formatDuration,
+  formatSessionSpan,
+  studyStats,
+  timeSpan,
+  toTimeInput,
+  type WeekTime,
+} from '../lib/study'
+import { toISODate } from '../lib/semester'
 import { cn } from '../lib/cn'
 import { Button } from './ui/Button'
-import { StudySetupSheet } from './StudySetupSheet'
+import { inputClass } from './ui/Field'
+import { StudySessionSheet, type SessionSheetTarget } from './StudySessionSheet'
 
 interface StudyViewProps {
   defaultWeek: number
@@ -14,8 +27,12 @@ interface StudyViewProps {
 export function StudyView({ defaultWeek }: StudyViewProps) {
   const { subjects, data, pauseStudy, resumeStudy, stopStudy } = usePlanner()
   const { activeStudy, studySessions } = data
-  const [setupOpen, setSetupOpen] = useState(false)
+  const [sheet, setSheet] = useState<SessionSheetTarget | null>(null)
   const stats = useMemo(() => studyStats(studySessions), [studySessions])
+  const recent = useMemo(
+    () => [...studySessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+    [studySessions],
+  )
 
   const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? 'Removed course'
 
@@ -37,9 +54,14 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
             <h2 className="text-base font-semibold tracking-tight text-zinc-900">Record study time</h2>
             <p className="text-sm text-zinc-500">Track time for a course, optionally split across its to-dos.</p>
           </div>
-          <Button variant="primary" icon={<Play className="size-4" />} onClick={() => setSetupOpen(true)}>
-            Record
-          </Button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button variant="primary" icon={<Play className="size-4" />} onClick={() => setSheet({ kind: 'record' })}>
+              Record
+            </Button>
+            <Button icon={<History className="size-4" />} onClick={() => setSheet({ kind: 'log' })}>
+              Add past session
+            </Button>
+          </div>
         </section>
       )}
 
@@ -54,6 +76,17 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
             <Metric label="Avg / week" value={formatDuration(stats.avgPerWeekMs)} />
             <Metric label="Avg / task" value={stats.tasks.length ? formatDuration(stats.avgPerTaskMs) : '–'} />
           </div>
+
+          {recent[0] && (
+            <Panel title="Last session">
+              <LastSession
+                key={recent[0].id}
+                session={recent[0]}
+                subjectName={subjectName(recent[0].subjectId)}
+                onEdit={() => setSheet({ kind: 'edit', session: recent[0] })}
+              />
+            </Panel>
+          )}
 
           <Panel title="Per week" meta={`${formatDuration(stats.avgPerWeekMs)} avg`}>
             <WeekBars weeks={stats.weeks} />
@@ -108,10 +141,40 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
               </ul>
             )}
           </Panel>
+
+          <Panel title="Sessions" meta="Tap to change times">
+            <ul className="divide-y divide-zinc-100">
+              {recent.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSheet({ kind: 'edit', session: s })}
+                    className="flex min-h-14 w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-150 ease-out hover:bg-zinc-50"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-zinc-900">
+                        {subjectName(s.subjectId)}
+                        <span className="font-normal text-zinc-400">
+                          {' '}
+                          · W{s.week}
+                          {s.categories.length > 0 ? ` · ${s.categories.join(', ')}` : ''}
+                        </span>
+                      </div>
+                      <div className="tabular truncate text-xs text-zinc-500">
+                        {formatSessionSpan(s.startedAt, s.endedAt)}
+                      </div>
+                    </div>
+                    <span className="tabular text-sm font-semibold text-zinc-900">{formatDuration(s.durationMs)}</span>
+                    <ChevronRight className="size-4 text-zinc-300" aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Panel>
         </>
       )}
 
-      <StudySetupSheet open={setupOpen} defaultWeek={defaultWeek} onClose={() => setSetupOpen(false)} />
+      <StudySessionSheet target={sheet} defaultWeek={defaultWeek} onClose={() => setSheet(null)} />
     </div>
   )
 }
@@ -124,11 +187,20 @@ interface ActiveCardProps {
 }
 
 function ActiveCard({ subjectName, onPause, onResume, onStop }: ActiveCardProps) {
-  const { data } = usePlanner()
+  const { data, setStudyStart } = usePlanner()
   const active = data.activeStudy
   const running = active?.resumedAt != null
   const now = useNow(running)
+  const startId = useId()
   if (!active) return null
+
+  const started = new Date(active.startedAt)
+  const changeStart = (value: string) => {
+    const next = combineDateTime(toISODate(started), value)
+    if (!next) return
+    if (next.getTime() > Date.now()) next.setDate(next.getDate() - 1)
+    setStudyStart(next.getTime())
+  }
 
   return (
     <section
@@ -153,6 +225,16 @@ function ActiveCard({ subjectName, onPause, onResume, onStop }: ActiveCardProps)
           {active.categories.length > 0 ? ` · ${active.categories.join(', ')}` : ' · course only'}
         </p>
       </div>
+      <div className="flex items-center gap-2 text-sm text-zinc-500">
+        <label htmlFor={startId}>Started at</label>
+        <input
+          id={startId}
+          type="time"
+          value={toTimeInput(started)}
+          onChange={(e) => changeStart(e.target.value)}
+          className={cn(inputClass, 'tabular w-auto')}
+        />
+      </div>
       <div className="flex gap-2">
         {running ? (
           <Button icon={<Pause className="size-4" />} onClick={onPause}>
@@ -168,6 +250,110 @@ function ActiveCard({ subjectName, onPause, onResume, onStop }: ActiveCardProps)
         </Button>
       </div>
     </section>
+  )
+}
+
+interface LastSessionProps {
+  session: StudySession
+  subjectName: string
+  onEdit: () => void
+}
+
+/** Start and end are typed in place and saved as soon as both form a valid span. */
+function LastSession({ session, subjectName, onEdit }: LastSessionProps) {
+  const { updateStudySession } = usePlanner()
+  const start = new Date(session.startedAt)
+  const saved = { from: toTimeInput(start), to: toTimeInput(new Date(session.endedAt)) }
+  // Holds half-typed values while a field is focused; otherwise the saved times show.
+  const [draft, setDraft] = useState<typeof saved | null>(null)
+  const shown = draft ?? saved
+  const fromId = useId()
+  const toId = useId()
+
+  const span = timeSpan(toISODate(start), shown.from, shown.to)
+  const spanMs = span ? span.end.getTime() - span.start.getTime() : 0
+  const valid = span !== null && spanMs > 0 && spanMs < 24 * 60 * 60 * 1000
+  const changed = shown.from !== saved.from || shown.to !== saved.to
+
+  const change = (field: 'from' | 'to', value: string) => {
+    const next = { ...shown, [field]: value }
+    setDraft(next)
+    const nextSpan = timeSpan(toISODate(start), next.from, next.to)
+    if (!nextSpan) return
+    const ms = nextSpan.end.getTime() - nextSpan.start.getTime()
+    if (ms <= 0 || ms >= 24 * 60 * 60 * 1000) return
+    if (next.from === saved.from && next.to === saved.to) return
+    updateStudySession({
+      ...session,
+      durationMs: ms,
+      startedAt: nextSpan.start.toISOString(),
+      endedAt: nextSpan.end.toISOString(),
+    })
+  }
+
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur()
+  }
+
+  return (
+    <div className="flex flex-col gap-3 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-zinc-900">
+            {subjectName}
+            <span className="font-normal text-zinc-400">
+              {' '}
+              · W{session.week}
+              {session.categories.length > 0 ? ` · ${session.categories.join(', ')}` : ''}
+            </span>
+          </div>
+          <div className="text-xs text-zinc-500">
+            {formatSessionSpan(session.startedAt, session.endedAt).split(' · ')[0]}
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" icon={<Pencil className="size-4" />} onClick={onEdit} className="h-11 lg:h-9">
+          Edit
+        </Button>
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <label htmlFor={fromId} className="text-xs font-medium text-zinc-500">
+            From
+          </label>
+          <input
+            id={fromId}
+            type="time"
+            value={shown.from}
+            onChange={(e) => change('from', e.target.value)}
+            onBlur={() => setDraft(null)}
+            onKeyDown={onKeyDown}
+            className={cn(inputClass, 'tabular')}
+          />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <label htmlFor={toId} className="text-xs font-medium text-zinc-500">
+            To
+          </label>
+          <input
+            id={toId}
+            type="time"
+            value={shown.to}
+            onChange={(e) => change('to', e.target.value)}
+            onBlur={() => setDraft(null)}
+            onKeyDown={onKeyDown}
+            className={cn(inputClass, 'tabular')}
+          />
+        </div>
+        <span
+          className={cn(
+            'tabular flex h-11 w-16 shrink-0 items-center justify-end text-sm font-semibold',
+            changed && !valid ? 'text-red-600' : 'text-zinc-900',
+          )}
+        >
+          {formatDuration(changed ? spanMs : session.durationMs)}
+        </span>
+      </div>
+    </div>
   )
 }
 

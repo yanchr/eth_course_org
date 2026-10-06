@@ -1,5 +1,5 @@
 import type { ProgressState, Subject } from '../types'
-import { isTracked, occursInWeek } from './subjects'
+import { categoriesInWeek, isTracked, occursInWeek } from './subjects'
 
 export function progressKey(week: number, category: string): string {
   return `${week}-${category}`
@@ -33,15 +33,15 @@ function stats(completed: number, canceled: number, total: number): ProgressStat
 }
 
 export function weekStats(subject: Subject, week: number): ProgressStats {
-  if (!isTracked(subject) || !occursInWeek(subject, week)) return stats(0, 0, 0)
+  const names = categoriesInWeek(subject, week)
   let completed = 0
   let canceled = 0
-  for (const c of subject.categories) {
+  for (const c of names) {
     const s = getProgress(subject, week, c)
     if (s === 'completed') completed++
     else if (s === 'canceled') canceled++
   }
-  return stats(completed, canceled, subject.categories.length)
+  return stats(completed, canceled, names.length)
 }
 
 /**
@@ -50,7 +50,7 @@ export function weekStats(subject: Subject, week: number): ProgressStats {
  * matching how `weekCompletions` scores an empty week.
  */
 export function isWeekDone(subject: Subject, week: number): boolean {
-  if (!isTracked(subject) || !occursInWeek(subject, week) || subject.categories.length === 0) return false
+  if (categoriesInWeek(subject, week).length === 0) return false
   const s = weekStats(subject, week)
   return s.completed + s.canceled === s.total
 }
@@ -71,17 +71,19 @@ export function sortByWeekOutstanding(subjects: Subject[], week: number): Subjec
 export function subjectStats(subject: Subject, throughWeek: number): ProgressStats {
   if (!isTracked(subject)) return stats(0, 0, 0)
   if (subject.onceWeek != null) {
-    if (subject.onceWeek > throughWeek) return stats(0, 0, subject.categories.length)
+    if (subject.onceWeek > throughWeek) return stats(0, 0, categoriesInWeek(subject, subject.onceWeek).length)
     return weekStats(subject, subject.onceWeek)
   }
   let completed = 0
   let canceled = 0
+  let total = 0
   for (let w = 1; w <= throughWeek; w++) {
     const s = weekStats(subject, w)
     completed += s.completed
     canceled += s.canceled
+    total += s.total
   }
-  return stats(completed, canceled, subject.categories.length * throughWeek)
+  return stats(completed, canceled, total)
 }
 
 export interface WeekCompletion {

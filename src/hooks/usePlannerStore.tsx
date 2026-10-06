@@ -29,6 +29,10 @@ interface PlannerStore {
   pauseStudy: () => void
   resumeStudy: () => void
   stopStudy: () => void
+  setStudyStart: (startedAt: number) => void
+  addStudySession: (session: StudySession) => void
+  updateStudySession: (session: StudySession) => void
+  deleteStudySession: (id: string) => void
   updateSettings: (patch: Partial<Settings>) => void
   replaceData: (data: PlannerData) => void
   resetData: () => void
@@ -100,10 +104,52 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
   )
 
   const startStudy = useCallback((subjectId: string, week: number, categories: string[]) => {
+    const now = Date.now()
     setData((prev) => ({
       ...prev,
-      activeStudy: { subjectId, week, categories, accumulatedMs: 0, resumedAt: Date.now() },
+      activeStudy: { subjectId, week, categories, startedAt: now, accumulatedMs: 0, resumedAt: now },
     }))
+  }, [])
+
+  /** Moves the start of the running recording; the elapsed time shifts by the same amount. */
+  const setStudyStart = useCallback((startedAt: number) => {
+    setData((prev) => {
+      const active = prev.activeStudy
+      if (!active) return prev
+      const now = Date.now()
+      const start = Math.min(startedAt, now)
+      const shift = active.startedAt - start
+      if (active.resumedAt === null) {
+        return {
+          ...prev,
+          activeStudy: { ...active, startedAt: start, accumulatedMs: Math.max(0, active.accumulatedMs + shift) },
+        }
+      }
+      // While running, fold any negative shift into the current run so elapsed never goes below zero.
+      const accumulatedMs = active.accumulatedMs + shift
+      return {
+        ...prev,
+        activeStudy:
+          accumulatedMs >= 0
+            ? { ...active, startedAt: start, accumulatedMs }
+            : { ...active, startedAt: start, accumulatedMs: 0, resumedAt: Math.min(now, active.resumedAt - accumulatedMs) },
+      }
+    })
+  }, [])
+
+  const addStudySession = useCallback((session: StudySession) => {
+    setData((prev) => ({ ...prev, studySessions: [...prev.studySessions, session] }))
+  }, [])
+
+  const updateStudySession = useCallback((session: StudySession) => {
+    setData((prev) => ({
+      ...prev,
+      studySessions: prev.studySessions.map((s) => (s.id === session.id ? session : s)),
+    }))
+  }, [])
+
+  const deleteStudySession = useCallback((id: string) => {
+    setData((prev) => ({ ...prev, studySessions: prev.studySessions.filter((s) => s.id !== id) }))
   }, [])
 
   const pauseStudy = useCallback(() => {
@@ -133,6 +179,7 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
         week: active.week,
         categories: active.categories,
         durationMs,
+        startedAt: new Date(active.startedAt).toISOString(),
         endedAt: new Date().toISOString(),
       }
       return {
@@ -163,6 +210,10 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       pauseStudy,
       resumeStudy,
       stopStudy,
+      setStudyStart,
+      addStudySession,
+      updateStudySession,
+      deleteStudySession,
       updateSettings,
       replaceData,
       resetData,
@@ -177,6 +228,10 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       pauseStudy,
       resumeStudy,
       stopStudy,
+      setStudyStart,
+      addStudySession,
+      updateStudySession,
+      deleteStudySession,
       updateSettings,
       replaceData,
       resetData,
