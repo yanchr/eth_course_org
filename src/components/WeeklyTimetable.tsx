@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { Check, MapPin } from 'lucide-react'
 import { DAYS, WEEKEND_DAYS, type Day, type Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
-import { dateForDay, formatMinutes, parseTimeRange, todayDay } from '../lib/semester'
+import { currentWeek, dateForDay, formatMinutes, parseTimeRange, rawWeekIndex, todayDay } from '../lib/semester'
 import { categoryForSlot, DAY_LABEL, layoutDaySlots, slotLabel, slotsForDay } from '../lib/schedule'
 import { getProgress, isWeekDone, weekStats } from '../lib/progress'
 import { eventForSlot, isCalendar, isOnce, occursInWeek, slotsInWeek } from '../lib/subjects'
@@ -11,11 +11,10 @@ import { cn } from '../lib/cn'
 
 interface WeeklyTimetableProps {
   week: number
-  isCurrentWeek: boolean
   onOpen: (subject: Subject, slotId?: string) => void
   /** 2 = phone pager (today + tomorrow, swipe). 7 = full week. */
   daysVisible?: 2 | 7
-  /** Swipe past Sunday, or back from Monday, moves the selected week. */
+  /** The week currently in view. Scrolling the strip updates it. */
   onWeekChange?: (week: number) => void
 }
 
@@ -63,159 +62,106 @@ function useFitHourPx(ref: RefObject<HTMLDivElement | null>, reservedPx: number)
   return px
 }
 
-type WeekEdge = 'start' | 'end'
+type Column = { week: number; day: Day }
 
-/**
- * A sideways swipe changes week only from the edge of the current one.
- * `days` treats Sunday as the end of a day pager. `scroll` treats the
- * scrollport: a week that already fits counts as both edges, so any
- * sideways swipe moves to the next or previous week.
- */
-function useWeekEdgeSwipe(
-  ref: RefObject<HTMLElement | null>,
-  opts: {
-    enabled: boolean
-    mode: 'days' | 'scroll'
-    week: number
-    weekCount: number
-    onWeekChange?: (week: number, edge: WeekEdge) => void
-  },
-) {
-  const optsRef = useRef(opts)
-  optsRef.current = opts
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el || !opts.enabled) return
-
-    let tracking = false
-    let startX = 0
-    let startY = 0
-    let startScroll = 0
-    let lockedUntil = 0
-    let consumed = false
-
-    const dayIndex = (scrollLeft: number) => {
-      const dayW = el.clientWidth / PEEK
-      if (dayW <= 0) return 0
-      return Math.round(scrollLeft / dayW)
-    }
-
-    const atEdge = (scrollLeft: number) => {
-      if (optsRef.current.mode === 'days') {
-        const index = dayIndex(scrollLeft)
-        return { atStart: index <= 0, atEnd: index >= DAYS.length - 1 }
-      }
-      const max = el.scrollWidth - el.clientWidth
-      return { atStart: max <= 2 || scrollLeft <= 2, atEnd: max <= 2 || scrollLeft >= max - 2 }
-    }
-
-    const go = (dir: 1 | -1) => {
-      const { week, weekCount, onWeekChange } = optsRef.current
-      if (!onWeekChange || Date.now() < lockedUntil) return
-      const next = week + dir
-      if (next < 1 || next > weekCount) return
-      lockedUntil = Date.now() + 600
-      consumed = true
-      onWeekChange(next, dir > 0 ? 'start' : 'end')
-    }
-
-    const onDown = (e: PointerEvent) => {
-      if (e.pointerType !== 'touch') return
-      tracking = true
-      consumed = false
-      startX = e.clientX
-      startY = e.clientY
-      startScroll = el.scrollLeft
-    }
-
-    const onUp = (e: PointerEvent) => {
-      if (!tracking || e.pointerType !== 'touch') return
-      tracking = false
-      const dx = e.clientX - startX
-      const dy = e.clientY - startY
-      if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy)) return
-      const { atStart, atEnd } = atEdge(startScroll)
-      if (dx < 0 && atEnd) go(1)
-      else if (dx > 0 && atStart) go(-1)
-    }
-
-    const onCancel = () => {
-      tracking = false
-    }
-
-    const onClick = (e: Event) => {
-      if (!consumed) return
-      consumed = false
-      e.preventDefault()
-      e.stopPropagation()
-    }
-
-    const onWheel = (e: WheelEvent) => {
-      if (Math.abs(e.deltaX) < 24 || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
-      const { atStart, atEnd } = atEdge(el.scrollLeft)
-      if (e.deltaX > 0 && atEnd) {
-        e.preventDefault()
-        go(1)
-      } else if (e.deltaX < 0 && atStart) {
-        e.preventDefault()
-        go(-1)
-      }
-    }
-
-    el.addEventListener('pointerdown', onDown)
-    window.addEventListener('pointerup', onUp)
-    window.addEventListener('pointercancel', onCancel)
-    el.addEventListener('click', onClick, true)
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => {
-      el.removeEventListener('pointerdown', onDown)
-      window.removeEventListener('pointerup', onUp)
-      window.removeEventListener('pointercancel', onCancel)
-      el.removeEventListener('click', onClick, true)
-      el.removeEventListener('wheel', onWheel)
-    }
-  }, [ref, opts.enabled, opts.mode])
+/** Which semester week is sitting at the left of the full-week strip. */
+function weekAtLeft(el: HTMLElement, gutter: number): number {
+  const probe = el.getBoundingClientRect().left + gutter + 12
+  let found = 1
+  for (const panel of el.querySelectorAll<HTMLElement>('[data-week-panel]')) {
+    if (panel.getBoundingClientRect().left <= probe) found = Number(panel.dataset.weekPanel) || found
+  }
+  return found
 }
 
-export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, onWeekChange }: WeeklyTimetableProps) {
+function weekFromPager(el: HTMLElement, weekCount: number): number {
+  const dayW = el.clientWidth / PEEK
+  if (dayW <= 0) return 1
+  const index = Math.round(el.scrollLeft / dayW)
+  return Math.min(weekCount, Math.max(1, Math.floor(index / DAYS.length) + 1))
+}
+
+export function WeeklyTimetable({ week, onOpen, daysVisible = 7, onWeekChange }: WeeklyTimetableProps) {
   const { subjects, settings } = usePlanner()
-  const { weekCount } = settings
-  const land = useRef<WeekEdge | null>(null)
-  const requestWeek = (next: number, edge: WeekEdge) => {
-    if (!onWeekChange || next < 1 || next > weekCount || next === week) return
-    land.current = edge
-    onWeekChange(next)
-  }
-  const today = isCurrentWeek ? todayDay() : null
-  const now = useMinutesNow(isCurrentWeek)
+  const { weekCount, semesterStartDate } = settings
   const pager = daysVisible === 2
   const scrollerRef = useRef<HTMLDivElement>(null)
   const headerScrollRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
   const verticalRef = useRef<HTMLDivElement>(null)
+  const gutterRef = useRef<HTMLDivElement>(null)
   const hourPx = useFitHourPx(frameRef, HEADER_H)
+  const [pane, setPane] = useState(0)
+  const [snapWeeks, setSnapWeeks] = useState(true)
 
-  const weekSubjects = subjects.filter((s) => occursInWeek(s, week))
-  const ranges = weekSubjects
-    .flatMap((s) => slotsInWeek(s, week).map((slot) => parseTimeRange(slot.time)))
-    .filter((r) => r !== null)
-  const startMin = Math.floor(Math.min(DEFAULT_START, ...ranges.map((r) => r.start)) / 60) * 60
-  const endMin = Math.ceil(Math.max(DEFAULT_END, ...ranges.map((r) => r.end)) / 60) * 60
+  const raw = rawWeekIndex(semesterStartDate, weekCount)
+  const inSemester = raw >= 1 && raw <= weekCount
+  const todayWeek = currentWeek(semesterStartDate, weekCount)
+  const today = inSemester ? todayDay() : null
+  const now = useMinutesNow(inSemester)
+
+  const columns = useMemo(() => {
+    const list: Column[] = []
+    for (let w = 1; w <= weekCount; w++) {
+      for (const day of DAYS) list.push({ week: w, day })
+    }
+    return list
+  }, [weekCount])
+
+  const { startMin, endMin } = useMemo(() => {
+    const ranges = subjects.flatMap((subject) =>
+      [...subject.scheduleSlots, ...(subject.events ?? []).flatMap((event) => event.slots)]
+        .map((slot) => parseTimeRange(slot.time))
+        .filter((range) => range !== null),
+    )
+    return {
+      startMin: Math.floor(Math.min(DEFAULT_START, ...ranges.map((range) => range.start)) / 60) * 60,
+      endMin: Math.ceil(Math.max(DEFAULT_END, ...ranges.map((range) => range.end)) / 60) * 60,
+    }
+  }, [subjects])
+
+  const unscheduledByWeek = useMemo(() => {
+    const map = new Map<number, { subject: Subject; slot: Subject['scheduleSlots'][number] }[]>()
+    for (let w = 1; w <= weekCount; w++) {
+      const items = subjects
+        .filter((subject) => occursInWeek(subject, w))
+        .flatMap((subject) =>
+          slotsInWeek(subject, w)
+            .filter((slot) => !parseTimeRange(slot.time))
+            .map((slot) => ({ subject, slot })),
+        )
+      map.set(w, items)
+    }
+    return map
+  }, [subjects, weekCount])
+
+  const allDayRows = Math.max(
+    0,
+    ...columns.map(
+      ({ week: w, day }) => (unscheduledByWeek.get(w) ?? []).filter((item) => item.slot.day === day).length,
+    ),
+  )
+  const allDayHeight = allDayRows > 0 ? 4 + 36 * allDayRows : 0
+
   const hours = Array.from({ length: (endMin - startMin) / 60 }, (_, i) => startMin + i * 60)
   const height = ((endMin - startMin) / 60) * hourPx
-  const unscheduled = weekSubjects.flatMap((subject) =>
-    slotsInWeek(subject, week)
-      .filter((slot) => !parseTimeRange(slot.time))
-      .map((slot) => ({ subject, slot })),
-  )
   const nowTop = now !== null ? ((now - startMin) / 60) * hourPx : null
   const showNow = nowTop !== null && now !== null && now >= startMin && now <= endMin
+  const dayCount = columns.length
+  const pagerTrack = {
+    width: `${((dayCount + 1) / PEEK) * 100}%`,
+    gridTemplateColumns: `repeat(${dayCount + 1}, minmax(0, 1fr))`,
+  }
 
-  const startIndex = (() => {
-    const idx = today ? DAYS.indexOf(today) : 0
-    return Math.max(0, idx)
-  })()
+  const weekRef = useRef(week)
+  weekRef.current = week
+  const onWeekChangeRef = useRef(onWeekChange)
+  onWeekChangeRef.current = onWeekChange
+  const alignedWeek = useRef<number | null>(null)
+  const ready = useRef(false)
+  const programmatic = useRef(false)
+  const targetLeft = useRef<number | null>(null)
+  const paneSeen = useRef(-1)
 
   const syncHeader = () => {
     const body = scrollerRef.current
@@ -224,25 +170,104 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, 
     head.scrollLeft = body.scrollLeft
   }
 
-  useLayoutEffect(() => {
-    const el = scrollerRef.current
-    if (!pager || !el) return
-    const dayW = el.clientWidth / PEEK
-    const where = land.current
-    land.current = null
-    if (where === 'end') el.scrollLeft = (DAYS.length - 1) * dayW
-    else if (where === 'start') el.scrollLeft = 0
-    else el.scrollLeft = startIndex * dayW
-    syncHeader()
-  }, [pager, week, startIndex])
+  const horizontalRef = pager ? scrollerRef : verticalRef
 
-  useWeekEdgeSwipe(pager ? scrollerRef : verticalRef, {
-    enabled: onWeekChange != null,
-    mode: pager ? 'days' : 'scroll',
-    week,
-    weekCount,
-    onWeekChange: requestWeek,
-  })
+  useLayoutEffect(() => {
+    if (pager) return
+    const el = verticalRef.current
+    if (!el) return
+    const measure = () => {
+      const gutter = gutterRef.current?.offsetWidth ?? 0
+      const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+      const minWeek = 44 * rootPx
+      const available = el.clientWidth - gutter
+      const snap = el.clientWidth >= minWeek
+      const next = Math.max(1, Math.round(snap ? available : minWeek - gutter))
+      setPane((prev) => (prev === next ? prev : next))
+      setSnapWeeks((prev) => (prev === snap ? prev : snap))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [pager])
+
+  useEffect(() => {
+    const el = horizontalRef.current
+    if (!el) return
+    const finishProgrammatic = () => {
+      const target = targetLeft.current
+      if (target == null || Math.abs(el.scrollLeft - target) > 3) return
+      programmatic.current = false
+      targetLeft.current = null
+    }
+    const onScroll = () => {
+      if (pager) syncHeader()
+      if (!ready.current || programmatic.current) {
+        if (programmatic.current) finishProgrammatic()
+        return
+      }
+      const visible = pager ? weekFromPager(el, weekCount) : weekAtLeft(el, gutterRef.current?.offsetWidth ?? 0)
+      alignedWeek.current = visible
+      if (visible !== weekRef.current) onWeekChangeRef.current?.(visible)
+    }
+    const onPointerDown = () => {
+      programmatic.current = false
+      targetLeft.current = null
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('scrollend', finishProgrammatic)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('scrollend', finishProgrammatic)
+    }
+  }, [horizontalRef, pager, weekCount])
+
+  useLayoutEffect(() => {
+    const el = horizontalRef.current
+    if (!el) return
+    if (!pager && pane <= 0) return
+    if (paneSeen.current !== pane) {
+      paneSeen.current = pane
+      alignedWeek.current = null
+    }
+    if (alignedWeek.current === week) {
+      ready.current = true
+      return
+    }
+
+    const behavior: ScrollBehavior = alignedWeek.current == null ? 'auto' : 'smooth'
+    alignedWeek.current = week
+    const max = Math.max(0, el.scrollWidth - el.clientWidth)
+    let left = 0
+    if (pager) {
+      const dayW = el.clientWidth / PEEK
+      if (dayW <= 0) {
+        alignedWeek.current = null
+        return
+      }
+      const dayOffset = week === todayWeek && today ? DAYS.indexOf(today) : 0
+      left = ((week - 1) * DAYS.length + dayOffset) * dayW
+    } else {
+      const panel = el.querySelector<HTMLElement>(`[data-week-panel="${week}"]`)
+      if (!panel) {
+        alignedWeek.current = null
+        return
+      }
+      const gutter = gutterRef.current?.offsetWidth ?? 0
+      const delta = panel.getBoundingClientRect().left - el.getBoundingClientRect().left - gutter
+      left = el.scrollLeft + delta
+    }
+    left = Math.min(max, Math.max(0, left))
+    ready.current = true
+    if (Math.abs(el.scrollLeft - left) <= 3) return
+    programmatic.current = behavior === 'smooth'
+    targetLeft.current = behavior === 'smooth' ? left : null
+    el.scrollTo({ left, top: el.scrollTop, behavior })
+    if (pager) syncHeader()
+  }, [horizontalRef, pager, pane, week, weekCount, today, todayWeek])
 
   useLayoutEffect(() => {
     const el = verticalRef.current
@@ -250,72 +275,75 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, 
     if (!el || !frame || frame.clientHeight === 0) return
     const allDayH = el.querySelector<HTMLElement>('[data-all-day]')?.offsetHeight ?? 0
     const offset = Math.max(0, (DEFAULT_START - startMin) / 60) * hourPx
-    el.scrollTop = allDayH + offset
-  }, [week, pager, startMin, hourPx])
+    const top = allDayH + offset
+    if (Math.abs(el.scrollTop - top) <= 1) return
+    el.scrollTop = top
+  }, [pager, startMin, hourPx, allDayHeight])
+
+  const scrollStrip = (left: number) => {
+    const el = horizontalRef.current
+    if (!el) return
+    const max = Math.max(0, el.scrollWidth - el.clientWidth)
+    const next = Math.min(max, Math.max(0, left))
+    programmatic.current = false
+    targetLeft.current = null
+    el.scrollTo({ left: next, top: el.scrollTop, behavior: 'smooth' })
+  }
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!pager) return
-    const el = scrollerRef.current
+    const el = horizontalRef.current
     if (!el) return
-    const dayW = el.clientWidth / PEEK
-    const index = Math.round(el.scrollLeft / dayW)
+    if (pager) {
+      const dayW = el.clientWidth / PEEK
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        scrollStrip(el.scrollLeft + dayW)
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        scrollStrip(el.scrollLeft - dayW)
+      } else if (e.key === 'Home') {
+        e.preventDefault()
+        onWeekChange?.(1)
+      } else if (e.key === 'End') {
+        e.preventDefault()
+        onWeekChange?.(weekCount)
+      }
+      return
+    }
     if (e.key === 'ArrowRight') {
       e.preventDefault()
-      if (index >= DAYS.length - 1) requestWeek(week + 1, 'start')
-      else el.scrollBy({ left: dayW, behavior: 'smooth' })
+      onWeekChange?.(Math.min(weekCount, week + 1))
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
-      if (index <= 0) requestWeek(week - 1, 'end')
-      else el.scrollBy({ left: -dayW, behavior: 'smooth' })
+      onWeekChange?.(Math.max(1, week - 1))
     } else if (e.key === 'Home') {
       e.preventDefault()
-      el.scrollTo({ left: 0, behavior: 'smooth' })
+      onWeekChange?.(1)
     } else if (e.key === 'End') {
       e.preventDefault()
-      el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+      onWeekChange?.(weekCount)
     }
   }
 
-  const allDay = unscheduled.length > 0
-
-  const dayColumns = DAYS.map((day) => (
-    <DayPane
-      key={day}
-      day={day}
-      week={week}
-      today={today}
-      hours={hours}
-      startMin={startMin}
-      height={height}
-      hourPx={hourPx}
-      subjects={subjects}
-      unscheduled={unscheduled}
-      nowTop={day === today && showNow ? nowTop : null}
-      snap={pager}
-      onOpen={onOpen}
-    />
-  ))
-
-  const pagerTrack = {
-    width: `${((DAYS.length + 1) / PEEK) * 100}%`,
-    gridTemplateColumns: `repeat(${DAYS.length + 1}, minmax(0, 1fr))`,
-  }
+  const isToday = (column: Column) => column.day === today && column.week === todayWeek
 
   if (pager) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col gap-2" onKeyDown={onKeyDown}>
-        <p className="shrink-0 px-1 text-xs text-zinc-500">Swipe days · past Sunday opens the next week</p>
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        <p className="shrink-0 px-1 text-xs text-zinc-500">Swipe through the semester</p>
         <div ref={frameRef} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
           <div className="flex shrink-0 border-b border-zinc-100">
             <div className="shrink-0 border-r border-zinc-100 bg-white" style={{ width: GUTTER }} />
             <div ref={headerScrollRef} className="scrollbar-none min-w-0 flex-1 overflow-hidden">
               <div className="grid" style={pagerTrack}>
-                {DAYS.map((day) => (
+                {columns.map((column) => (
                   <DayHeader
-                    key={day}
-                    day={day}
-                    today={today}
-                    date={dateForDay(settings.semesterStartDate, week, day)}
+                    key={`${column.week}-${column.day}`}
+                    day={column.day}
+                    today={isToday(column) ? column.day : null}
+                    date={dateForDay(semesterStartDate, column.week, column.day)}
+                    kicker={column.day === 'Mon' ? `W${column.week}` : undefined}
+                    edge={column.day === 'Mon' && column.week > 1}
                   />
                 ))}
                 <div aria-hidden="true" className="border-l border-zinc-100 bg-zinc-50" />
@@ -325,10 +353,11 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, 
           <div ref={verticalRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             <div className="flex">
               <div className="shrink-0 border-r border-zinc-100 bg-white" style={{ width: GUTTER }}>
-                {allDay && (
+                {allDayHeight > 0 && (
                   <div
                     data-all-day
-                    className="flex h-10 items-center justify-end px-1.5 text-[9px] font-medium tracking-wide text-zinc-400 uppercase"
+                    className="flex items-center justify-end px-1.5 text-[9px] font-medium tracking-wide text-zinc-400 uppercase"
+                    style={{ height: allDayHeight }}
                   >
                     All day
                   </div>
@@ -351,12 +380,30 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, 
                 ref={scrollerRef}
                 tabIndex={0}
                 role="region"
-                aria-label="Week schedule, two days at a time. Swipe or use arrow keys. Past Sunday opens the next week, before Monday the previous week."
-                onScroll={syncHeader}
-                className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain outline-none"
+                aria-label={`Semester schedule, two days at a time, weeks 1 to ${weekCount}. Swipe sideways to move through the semester.`}
+                onKeyDown={onKeyDown}
+                className="scrollbar-none min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900"
               >
                 <div className="grid" style={pagerTrack}>
-                  {dayColumns}
+                  {columns.map((column) => (
+                    <DayPane
+                      key={`${column.week}-${column.day}`}
+                      day={column.day}
+                      week={column.week}
+                      today={isToday(column) ? column.day : null}
+                      hours={hours}
+                      startMin={startMin}
+                      height={height}
+                      hourPx={hourPx}
+                      subjects={subjects}
+                      unscheduled={unscheduledByWeek.get(column.week) ?? []}
+                      nowTop={isToday(column) && showNow ? nowTop : null}
+                      snap
+                      edge={column.day === 'Mon' && column.week > 1}
+                      allDayHeight={allDayHeight}
+                      onOpen={onOpen}
+                    />
+                  ))}
                   <div aria-hidden="true" className="snap-start border-l border-zinc-100 bg-zinc-50/40" />
                 </div>
               </div>
@@ -367,74 +414,102 @@ export function WeeklyTimetable({ week, isCurrentWeek, onOpen, daysVisible = 7, 
     )
   }
 
-  const columns = { gridTemplateColumns: `${GUTTER} repeat(7, minmax(0, 1fr))` }
+  const weekStyle = { width: pane > 0 ? pane : undefined, minWidth: 'calc(44rem - 3.25rem)' }
 
   return (
     <div ref={frameRef} className="flex min-h-0 flex-1 flex-col">
       <div
         ref={verticalRef}
+        tabIndex={0}
         role="region"
-        aria-label="Week schedule. Swipe left past Sunday for the next week, swipe right before Monday for the previous week."
-        className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-zinc-200 bg-white shadow-xs"
+        aria-label={`Semester schedule, weeks 1 to ${weekCount}. Swipe sideways to move between weeks.`}
+        onKeyDown={onKeyDown}
+        style={{ scrollPaddingLeft: GUTTER }}
+        className={cn(
+          'min-h-0 flex-1 overflow-auto overscroll-contain rounded-2xl border border-zinc-200 bg-white shadow-xs focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-zinc-900',
+          snapWeeks && 'snap-x snap-mandatory',
+        )}
       >
-        <div className="min-w-[44rem]">
-          <div className="sticky top-0 z-20 grid bg-white" style={columns}>
-            <div className="sticky left-0 z-30 bg-white" />
-            {DAYS.map((day) => (
-              <DayHeader
-                key={day}
-                day={day}
-                today={today}
-                date={dateForDay(settings.semesterStartDate, week, day)}
-              />
-            ))}
-          </div>
-          {allDay && (
-            <div data-all-day className="grid border-t border-zinc-200" style={columns}>
-              <div className="sticky left-0 z-10 flex items-center justify-end bg-white px-2 py-2 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">
-                All day
-              </div>
+        <div className="sticky top-0 z-20 flex w-max border-b border-zinc-200 bg-white">
+          <div ref={gutterRef} className="sticky left-0 z-30 shrink-0 bg-white" style={{ width: GUTTER }} />
+          {Array.from({ length: weekCount }, (_, i) => i + 1).map((w) => (
+            <div key={w} className="grid shrink-0 grid-cols-7" style={{ ...weekStyle, gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
               {DAYS.map((day) => (
-                <AllDayLane
+                <DayHeader
                   key={day}
                   day={day}
-                  today={today}
-                  items={unscheduled.filter(({ slot }) => slot.day === day)}
+                  today={isToday({ week: w, day }) ? day : null}
+                  date={dateForDay(semesterStartDate, w, day)}
+                  kicker={day === 'Mon' ? `W${w}` : undefined}
+                  edge={day === 'Mon' && w > 1}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+        {allDayHeight > 0 && (
+          <div data-all-day className="flex w-max">
+            <div
+              className="sticky left-0 z-10 flex shrink-0 items-center justify-end bg-white px-2 text-[10px] font-medium tracking-wide text-zinc-400 uppercase"
+              style={{ width: GUTTER }}
+            >
+              All day
+            </div>
+            {Array.from({ length: weekCount }, (_, i) => i + 1).map((w) => (
+              <div key={w} className="grid shrink-0 grid-cols-7" style={{ ...weekStyle, gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
+                {DAYS.map((day) => (
+                  <AllDayLane
+                    key={day}
+                    day={day}
+                    today={isToday({ week: w, day }) ? day : null}
+                    items={(unscheduledByWeek.get(w) ?? []).filter((item) => item.slot.day === day)}
+                    edge={day === 'Mon' && w > 1}
+                    onOpen={onOpen}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex w-max">
+          <div className="relative sticky left-0 z-10 shrink-0 bg-white" style={{ width: GUTTER, height }}>
+            {hours.map((h, i) =>
+              i === 0 ? null : (
+                <span
+                  key={h}
+                  className="tabular absolute right-2 -translate-y-1/2 text-[11px] text-zinc-400"
+                  style={{ top: i * hourPx }}
+                >
+                  {formatMinutes(h)}
+                </span>
+              ),
+            )}
+          </div>
+          {Array.from({ length: weekCount }, (_, i) => i + 1).map((w) => (
+            <div
+              key={w}
+              data-week-panel={w}
+              className="grid shrink-0 snap-start grid-cols-7"
+              style={{ ...weekStyle, height, gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}
+            >
+              {DAYS.map((day) => (
+                <DayBody
+                  key={day}
+                  day={day}
+                  week={w}
+                  today={isToday({ week: w, day }) ? day : null}
+                  hours={hours}
+                  startMin={startMin}
+                  hourPx={hourPx}
+                  height={height}
+                  subjects={subjects}
+                  nowTop={isToday({ week: w, day }) && showNow ? nowTop : null}
+                  edge={day === 'Mon' && w > 1}
                   onOpen={onOpen}
                 />
               ))}
             </div>
-          )}
-          <div className="relative grid border-t border-zinc-200" style={{ ...columns, height }}>
-            <div className="relative sticky left-0 z-10 bg-white">
-              {hours.map((h, i) =>
-                i === 0 ? null : (
-                  <span
-                    key={h}
-                    className="tabular absolute right-2 -translate-y-1/2 text-[11px] text-zinc-400"
-                    style={{ top: i * hourPx }}
-                  >
-                    {formatMinutes(h)}
-                  </span>
-                ),
-              )}
-            </div>
-            {DAYS.map((day) => (
-              <DayBody
-                key={day}
-                day={day}
-                week={week}
-                today={today}
-                hours={hours}
-                startMin={startMin}
-                hourPx={hourPx}
-                height={height}
-                subjects={subjects}
-                nowTop={day === today && showNow ? nowTop : null}
-                onOpen={onOpen}
-              />
-            ))}
-          </div>
+          ))}
         </div>
       </div>
     </div>
@@ -453,6 +528,8 @@ function DayPane({
   unscheduled,
   nowTop,
   snap,
+  edge,
+  allDayHeight,
   onOpen,
 }: {
   day: Day
@@ -466,15 +543,19 @@ function DayPane({
   unscheduled: { subject: Subject; slot: Subject['scheduleSlots'][number] }[]
   nowTop: number | null
   snap: boolean
+  edge?: boolean
+  allDayHeight?: number
   onOpen: (subject: Subject, slotId?: string) => void
 }) {
   return (
     <div className={cn('flex min-w-0 flex-col', snap && 'snap-start')}>
-      {unscheduled.length > 0 && (
+      {(allDayHeight ?? 0) > 0 && (
         <AllDayLane
           day={day}
           today={today}
           items={unscheduled.filter(({ slot }) => slot.day === day)}
+          edge={edge}
+          minHeight={allDayHeight}
           onOpen={onOpen}
         />
       )}
@@ -488,29 +569,43 @@ function DayPane({
         height={height}
         subjects={subjects}
         nowTop={nowTop}
+        edge={edge}
         onOpen={onOpen}
       />
     </div>
   )
 }
 
-function DayHeader({ day, today, date }: { day: Day; today: Day | null; date: Date }) {
+function DayHeader({
+  day,
+  today,
+  date,
+  kicker,
+  edge,
+}: {
+  day: Day
+  today: Day | null
+  date: Date
+  kicker?: string
+  edge?: boolean
+}) {
   const isToday = day === today
   return (
     <div
       className={cn(
-        'flex h-12 flex-col items-center justify-center gap-0.5 border-l border-zinc-100',
+        'flex h-12 flex-col items-center justify-center gap-0.5 border-l',
+        edge ? 'border-zinc-300' : 'border-zinc-100',
         WEEKEND_DAYS.includes(day) ? 'bg-zinc-50' : 'bg-white',
         isToday && 'bg-zinc-50',
       )}
     >
       <span
         className={cn(
-          'text-[10px] font-medium tracking-wide uppercase',
+          'max-w-full truncate px-1 text-[10px] font-medium tracking-wide uppercase',
           isToday ? 'text-zinc-900' : 'text-zinc-400',
         )}
       >
-        {day}
+        {kicker ? `${kicker} · ${day}` : day}
       </span>
       <span
         className={cn(
@@ -528,20 +623,27 @@ function AllDayLane({
   day,
   today,
   items,
+  edge,
+  minHeight,
   onOpen,
 }: {
   day: Day
   today: Day | null
   items: { subject: Subject; slot: Subject['scheduleSlots'][number] }[]
+  edge?: boolean
+  minHeight?: number
   onOpen: (subject: Subject, slotId?: string) => void
 }) {
   return (
     <div
       className={cn(
-        'flex min-h-10 flex-col justify-center gap-1 border-l border-t border-zinc-100 px-1 py-1',
+        'flex min-h-10 flex-col justify-center gap-1 border-t border-l px-1 py-1',
+        edge ? 'border-l-zinc-300' : 'border-l-zinc-100',
+        'border-t-zinc-100',
         WEEKEND_DAYS.includes(day) && 'bg-zinc-50/80',
         day === today && 'bg-zinc-50',
       )}
+      style={minHeight ? { height: minHeight, minHeight } : undefined}
     >
       {items.map(({ subject, slot }) => (
         <button
@@ -572,6 +674,7 @@ function DayBody({
   height,
   subjects,
   nowTop,
+  edge,
   onOpen,
 }: {
   day: Day
@@ -583,12 +686,14 @@ function DayBody({
   height: number
   subjects: Subject[]
   nowTop: number | null
+  edge?: boolean
   onOpen: (subject: Subject, slotId?: string) => void
 }) {
   return (
     <div
       className={cn(
-        'relative min-w-0 border-l border-zinc-100',
+        'relative min-w-0 border-l',
+        edge ? 'border-zinc-300' : 'border-zinc-100',
         WEEKEND_DAYS.includes(day) && 'bg-zinc-50/60',
         day === today && 'bg-zinc-50',
       )}

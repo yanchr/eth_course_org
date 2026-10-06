@@ -12,13 +12,38 @@ import {
   studyStats,
   timeSpan,
   toTimeInput,
+  type TaskTime,
   type WeekTime,
 } from '../lib/study'
 import { toISODate } from '../lib/semester'
 import { cn } from '../lib/cn'
 import { Button } from './ui/Button'
 import { inputClass } from './ui/Field'
+import { SegmentedControl } from './layout/SegmentedControl'
 import { StudySessionSheet, type SessionSheetTarget } from './StudySessionSheet'
+
+type StudySort = 'time' | 'week' | 'course'
+
+const SORT_OPTIONS: { value: StudySort; label: string }[] = [
+  { value: 'time', label: 'Time' },
+  { value: 'week', label: 'Week' },
+  { value: 'course', label: 'Course' },
+]
+
+const byName = (name: (id: string) => string, a: string, b: string) =>
+  name(a).localeCompare(name(b), undefined, { sensitivity: 'base' })
+
+function compareTasks(a: TaskTime, b: TaskTime, sort: StudySort, name: (id: string) => string): number {
+  if (sort === 'week') return b.week - a.week || b.ms - a.ms || byName(name, a.subjectId, b.subjectId)
+  if (sort === 'course') return byName(name, a.subjectId, b.subjectId) || a.category.localeCompare(b.category) || b.week - a.week
+  return b.ms - a.ms || b.week - a.week || byName(name, a.subjectId, b.subjectId)
+}
+
+function compareSessions(a: StudySession, b: StudySession, sort: StudySort, name: (id: string) => string): number {
+  if (sort === 'time') return b.durationMs - a.durationMs || b.startedAt.localeCompare(a.startedAt)
+  if (sort === 'course') return byName(name, a.subjectId, b.subjectId) || b.week - a.week || b.startedAt.localeCompare(a.startedAt)
+  return b.week - a.week || b.startedAt.localeCompare(a.startedAt)
+}
 
 interface StudyViewProps {
   defaultWeek: number
@@ -28,13 +53,22 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
   const { subjects, data, pauseStudy, resumeStudy, stopStudy } = usePlanner()
   const { activeStudy, studySessions } = data
   const [sheet, setSheet] = useState<SessionSheetTarget | null>(null)
+  const [taskSort, setTaskSort] = useState<StudySort>('time')
+  const [sessionSort, setSessionSort] = useState<StudySort>('week')
+  const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? 'Removed course'
   const stats = useMemo(() => studyStats(studySessions), [studySessions])
-  const recent = useMemo(
-    () => [...studySessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt)),
+  const tasks = useMemo(
+    () => [...stats.tasks].sort((a, b) => compareTasks(a, b, taskSort, subjectName)),
+    [stats.tasks, taskSort, subjects],
+  )
+  const sessions = useMemo(
+    () => [...studySessions].sort((a, b) => compareSessions(a, b, sessionSort, subjectName)),
+    [studySessions, sessionSort, subjects],
+  )
+  const latest = useMemo(
+    () => [...studySessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0],
     [studySessions],
   )
-
-  const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? 'Removed course'
 
   return (
     <div className="flex flex-col gap-4">
@@ -77,13 +111,13 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
             <Metric label="Avg / task" value={stats.tasks.length ? formatDuration(stats.avgPerTaskMs) : '–'} />
           </div>
 
-          {recent[0] && (
+          {latest && (
             <Panel title="Last session">
               <LastSession
-                key={recent[0].id}
-                session={recent[0]}
-                subjectName={subjectName(recent[0].subjectId)}
-                onEdit={() => setSheet({ kind: 'edit', session: recent[0] })}
+                key={latest.id}
+                session={latest}
+                subjectName={subjectName(latest.subjectId)}
+                onEdit={() => setSheet({ kind: 'edit', session: latest })}
               />
             </Panel>
           )}
@@ -127,7 +161,15 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
               </p>
             ) : (
               <ul className="divide-y divide-zinc-100">
-                {stats.tasks.map((t) => (
+                <li className="px-3 py-3">
+                  <SegmentedControl
+                    label="Sort tasks"
+                    options={SORT_OPTIONS}
+                    value={taskSort}
+                    onChange={setTaskSort}
+                  />
+                </li>
+                {tasks.map((t) => (
                   <li key={`${t.subjectId}-${t.week}-${t.category}`} className="flex items-baseline gap-3 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-zinc-900">{t.category}</div>
@@ -144,7 +186,15 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
 
           <Panel title="Sessions" meta="Tap to change times">
             <ul className="divide-y divide-zinc-100">
-              {recent.map((s) => (
+              <li className="px-3 py-3">
+                <SegmentedControl
+                  label="Sort sessions"
+                  options={SORT_OPTIONS}
+                  value={sessionSort}
+                  onChange={setSessionSort}
+                />
+              </li>
+              {sessions.map((s) => (
                 <li key={s.id}>
                   <button
                     type="button"
@@ -315,8 +365,8 @@ function LastSession({ session, subjectName, onEdit }: LastSessionProps) {
           Edit
         </Button>
       </div>
-      <div className="flex items-end gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+        <div className="flex min-w-0 flex-col gap-1">
           <label htmlFor={fromId} className="text-xs font-medium text-zinc-500">
             From
           </label>
@@ -327,10 +377,10 @@ function LastSession({ session, subjectName, onEdit }: LastSessionProps) {
             onChange={(e) => change('from', e.target.value)}
             onBlur={() => setDraft(null)}
             onKeyDown={onKeyDown}
-            className={cn(inputClass, 'tabular')}
+            className={cn(inputClass, 'tabular w-0 min-w-full')}
           />
         </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-1">
           <label htmlFor={toId} className="text-xs font-medium text-zinc-500">
             To
           </label>
@@ -341,12 +391,12 @@ function LastSession({ session, subjectName, onEdit }: LastSessionProps) {
             onChange={(e) => change('to', e.target.value)}
             onBlur={() => setDraft(null)}
             onKeyDown={onKeyDown}
-            className={cn(inputClass, 'tabular')}
+            className={cn(inputClass, 'tabular w-0 min-w-full')}
           />
         </div>
         <span
           className={cn(
-            'tabular flex h-11 w-16 shrink-0 items-center justify-end text-sm font-semibold',
+            'tabular flex h-11 items-center justify-end pl-1 text-sm font-semibold whitespace-nowrap',
             changed && !valid ? 'text-red-600' : 'text-zinc-900',
           )}
         >

@@ -139,8 +139,8 @@ function SessionBody({
               className={inputClass}
             />
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <label htmlFor={fromId} className="text-xs font-medium text-zinc-500">
                 From
               </label>
@@ -149,10 +149,10 @@ function SessionBody({
                 type="time"
                 value={times.from}
                 onChange={(e) => setTimes((t) => ({ ...t, from: e.target.value }))}
-                className={inputClass}
+                className={cn(inputClass, 'w-0 min-w-full')}
               />
             </div>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <label htmlFor={toId} className="text-xs font-medium text-zinc-500">
                 To
               </label>
@@ -161,7 +161,7 @@ function SessionBody({
                 type="time"
                 value={times.to}
                 onChange={(e) => setTimes((t) => ({ ...t, to: e.target.value }))}
-                className={inputClass}
+                className={cn(inputClass, 'w-0 min-w-full')}
               />
             </div>
           </div>

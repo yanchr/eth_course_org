@@ -193,12 +193,7 @@ export function AppShell() {
           className="flex h-[calc(100dvh-var(--app-header-h,8rem)-3rem)] min-h-0 min-w-0 flex-col gap-3 self-start xl:sticky xl:top-0"
         >
           <PanelHeading id="timetable-heading" title="Timetable" meta={`Week ${week}`} />
-          <WeeklyTimetable
-            week={week}
-            isCurrentWeek={inSemester && week === todayWeek}
-            onOpen={openSubject}
-            onWeekChange={setSelectedWeek}
-          />
+          <WeeklyTimetable week={week} onOpen={openSubject} onWeekChange={setSelectedWeek} />
         </section>
         <section aria-labelledby="progress-heading" className="flex min-w-0 flex-col gap-3">
           <PanelHeading
@@ -242,7 +237,6 @@ export function AppShell() {
         {tab === 'schedule' && (
           <WeeklyTimetable
             week={week}
-            isCurrentWeek={inSemester && week === todayWeek}
             onOpen={openSubject}
             onWeekChange={setSelectedWeek}
             daysVisible={weekCalendar ? 7 : 2}
