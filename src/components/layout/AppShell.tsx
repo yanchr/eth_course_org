@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Settings as SettingsIcon, Timer } from 'lucide-react'
 import type { Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
@@ -22,6 +22,7 @@ import { SubjectEditor, type EditorTarget } from '../SubjectEditor'
 import { SettingsDrawer } from '../SettingsDrawer'
 import { StudyView } from '../StudyView'
 import { BottomNav, type MobileTab } from './BottomNav'
+import { ClearCelebration } from '../ClearCelebration'
 
 function semesterLabel(startDate: string): string {
   const d = parseISODate(startDate)
@@ -83,6 +84,26 @@ export function AppShell() {
     .reduce((sum, w) => sum + w.scheduled - w.completed, 0)
   const openThisWeek = dueThroughWeek > 0 ? completion[dueThroughWeek - 1].scheduled - completion[dueThroughWeek - 1].completed : 0
   const carriedOver = open - openThisWeek
+
+  const [clearedWeek, setClearedWeek] = useState<number | null>(null)
+  const [seenOpen, setSeenOpen] = useState<number | null>(null)
+  const [armedWeek, setArmedWeek] = useState<number | null>(null)
+  if (seenOpen !== open) {
+    const reachedZero =
+      seenOpen !== null && seenOpen > 0 && open === 0 && hasSubjects && dueThroughWeek > 0
+    setSeenOpen(open)
+    if (reachedZero) setArmedWeek(dueThroughWeek)
+    else if (open > 0) setArmedWeek(null)
+  }
+  useEffect(() => {
+    if (armedWeek == null) return
+    const week = armedWeek
+    const id = window.setTimeout(() => {
+      setClearedWeek(week)
+      setArmedWeek(null)
+    }, 180)
+    return () => window.clearTimeout(id)
+  }, [armedWeek])
 
   const header = (
     <header ref={headerRef} className="z-30 shrink-0 border-b border-zinc-200/80 bg-zinc-50/85 backdrop-blur-md">
@@ -295,6 +316,7 @@ export function AppShell() {
         }}
       />
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {clearedWeek != null && <ClearCelebration week={clearedWeek} onDone={() => setClearedWeek(null)} />}
     </div>
   )
 }
