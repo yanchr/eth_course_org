@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Plus, Trash2, X } from 'lucide-react'
 import {
   DAYS,
@@ -9,7 +9,7 @@ import {
   type SubjectLink,
 } from '../types'
 import { createId } from '../lib/id'
-import { progressKey } from '../lib/progress'
+import { progressKey, renameCategoryProgress } from '../lib/progress'
 import { createCalendarItem, createEvent, createSubject, isCalendar, isOnce, withEvent } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { DAY_LABEL, normalizeSlotType, slotLabel } from '../lib/schedule'
@@ -30,7 +30,7 @@ interface SubjectEditorProps {
   subject: EditorTarget | null
   defaultWeek: number
   onClose: () => void
-  onSave: (subject: Subject) => void
+  onSave: (subject: Subject, categoryRenames?: Record<string, string>) => void
   onDelete: (id: string) => void
 }
 
@@ -84,14 +84,24 @@ interface EditorFormProps {
   isNew: boolean
   defaultWeek: number
   onCancel: () => void
-  onSave: (subject: Subject) => void
+  onSave: (subject: Subject, categoryRenames?: Record<string, string>) => void
   onDelete: (id: string) => void
+}
+
+interface CategoryEdit {
+  from: string
+  value: string
 }
 
 function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }: EditorFormProps) {
   const { settings, subjects } = usePlanner()
   const [draft, setDraft] = useState<Subject>(initial)
+  const draftRef = useRef(draft)
   const [newCategory, setNewCategory] = useState('')
+  const [categoryEdit, setCategoryEdit] = useState<CategoryEdit | null>(null)
+  const categoryEditRef = useRef<CategoryEdit | null>(null)
+  const categoryRenames = useRef<Record<string, string>>({})
+  const [categoryError, setCategoryError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
   const [parentId, setParentId] = useState('')
@@ -100,7 +110,66 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
   const once = draft.onceWeek != null
   const calendar = draft.calendarOnly === true
 
-  const patch = (p: Partial<Subject>) => setDraft((d) => ({ ...d, ...p }))
+  const patch = (p: Partial<Subject>) => {
+    const next = { ...draftRef.current, ...p }
+    draftRef.current = next
+    setDraft(next)
+  }
+
+  const closeCategoryEdit = () => {
+    categoryEditRef.current = null
+    setCategoryEdit(null)
+    setCategoryError(null)
+  }
+
+  const rememberRename = (from: string, to: string) => {
+    const renames = { ...categoryRenames.current }
+    const original = Object.keys(renames).find((key) => renames[key] === from)
+    if (original) {
+      if (original === to) delete renames[original]
+      else renames[original] = to
+    } else if (initial.categories.includes(from)) {
+      renames[from] = to
+    }
+    categoryRenames.current = renames
+  }
+
+  /** Commit or drop the open rename. Returns false when the name is a duplicate and the field stays open. */
+  const finishCategoryEdit = (mode: 'commit' | 'cancel'): boolean => {
+    const edit = categoryEditRef.current
+    if (!edit) return true
+    if (mode === 'cancel' || !draftRef.current.categories.includes(edit.from)) {
+      closeCategoryEdit()
+      return true
+    }
+    const name = edit.value.trim()
+    if (!name || name === edit.from) {
+      closeCategoryEdit()
+      return true
+    }
+    const duplicate = draftRef.current.categories.some(
+      (c) => c !== edit.from && c.toLowerCase() === name.toLowerCase(),
+    )
+    if (duplicate) {
+      setCategoryError('That name is already used.')
+      return false
+    }
+    rememberRename(edit.from, name)
+    patch({
+      categories: draftRef.current.categories.map((c) => (c === edit.from ? name : c)),
+      progress: renameCategoryProgress(draftRef.current.progress, edit.from, name),
+    })
+    closeCategoryEdit()
+    return true
+  }
+
+  const startCategoryEdit = (name: string) => {
+    if (!finishCategoryEdit('commit')) return
+    const next = { from: name, value: name }
+    categoryEditRef.current = next
+    setCategoryEdit(next)
+    setCategoryError(null)
+  }
   const patchSlot = (id: string, p: Partial<ScheduleSlot>) =>
     patch({ scheduleSlots: draft.scheduleSlots.map((s) => (s.id === id ? { ...s, ...p } : s)) })
   const patchLink = (id: string, p: Partial<SubjectLink>) =>
@@ -143,8 +212,9 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
 
   const addCategory = () => {
     const name = newCategory.trim()
-    if (!name || draft.categories.some((c) => c.toLowerCase() === name.toLowerCase())) return
-    patch({ categories: [...draft.categories, name] })
+    const categories = draftRef.current.categories
+    if (!name || categories.some((c) => c.toLowerCase() === name.toLowerCase())) return
+    patch({ categories: [...categories, name] })
     setNewCategory('')
   }
 
@@ -157,6 +227,8 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    if (!finishCategoryEdit('commit')) return
+    const draft = draftRef.current
     const name = draft.name.trim()
     if (!name) {
       setNameError('A name is required.')
@@ -208,7 +280,7 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
         .map((l) => ({ ...l, label: l.label || l.url })),
       scheduleSlots: draft.scheduleSlots.map((s) => ({ ...s, time: s.time.trim(), room: s.room.trim() })),
       events: draft.events?.length ? draft.events : undefined,
-    })
+    }, categoryRenames.current)
   }
 
   return (
@@ -325,25 +397,37 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
       )}
 
       {!once && !calendar && (
-        <Section title="Progress categories" description="Rows tracked every week.">
+        <Section title="Progress categories" description="Rows tracked every week. Select a name to rename it.">
           <div className="flex flex-wrap gap-2">
             {draft.categories.map((c) => (
-              <span
+              <CategoryChip
                 key={c}
-                className="inline-flex h-9 items-center gap-1 rounded-full border border-zinc-200 bg-white pr-1 pl-3.5 text-sm font-medium text-zinc-800"
-              >
-                {c}
-                <button
-                  type="button"
-                  aria-label={`Remove ${c}`}
-                  onClick={() => patch({ categories: draft.categories.filter((x) => x !== c) })}
-                  className="flex size-7 items-center justify-center rounded-full text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </span>
+                name={c}
+                editing={categoryEdit?.from === c}
+                value={categoryEdit?.from === c ? categoryEdit.value : c}
+                invalid={categoryEdit?.from === c && categoryError !== null}
+                onEdit={() => startCategoryEdit(c)}
+                onChange={(value) => {
+                  const next = { from: c, value }
+                  categoryEditRef.current = next
+                  setCategoryEdit(next)
+                  setCategoryError(null)
+                }}
+                onCommit={() => finishCategoryEdit('commit')}
+                onCancel={() => finishCategoryEdit('cancel')}
+                onBlur={() => finishCategoryEdit('commit')}
+                onRemove={() => {
+                  if (categoryEditRef.current?.from === c) closeCategoryEdit()
+                  patch({ categories: draftRef.current.categories.filter((x) => x !== c) })
+                }}
+              />
             ))}
           </div>
+          {categoryError && (
+            <p className="text-xs text-red-600" role="alert">
+              {categoryError}
+            </p>
+          )}
           <div className="flex gap-2">
             <input
               className={inputClass}
@@ -526,6 +610,82 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
         </div>
       </div>
     </form>
+  )
+}
+
+function CategoryChip({
+  name,
+  editing,
+  value,
+  invalid,
+  onEdit,
+  onChange,
+  onCommit,
+  onCancel,
+  onBlur,
+  onRemove,
+}: {
+  name: string
+  editing: boolean
+  value: string
+  invalid: boolean
+  onEdit: () => void
+  onChange: (value: string) => void
+  onCommit: () => void
+  onCancel: () => void
+  onBlur: () => void
+  onRemove: () => void
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-11 items-center rounded-full border bg-white sm:h-9',
+        invalid ? 'border-red-400 ring-2 ring-red-500/15' : editing ? 'border-zinc-900 ring-2 ring-zinc-900/10' : 'border-zinc-200',
+      )}
+    >
+      {editing ? (
+        <input
+          autoFocus
+          aria-label={`Rename ${name}`}
+          aria-invalid={invalid || undefined}
+          value={value}
+          size={Math.max(value.length, 1)}
+          className="field-sizing-content h-full min-w-12 max-w-full bg-transparent px-3.5 text-sm font-medium text-zinc-900 outline-none"
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onCommit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              e.stopPropagation()
+              onCancel()
+            }
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          aria-label={`Rename ${name}`}
+          onClick={onEdit}
+          className="h-full rounded-l-full px-3.5 text-sm font-medium text-zinc-800 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 max-sm:min-w-11"
+        >
+          {name}
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label={`Remove ${name}`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onRemove}
+        className="mr-0.5 flex size-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors duration-150 ease-out hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-900 sm:size-7"
+      >
+        <X className="size-3.5" />
+      </button>
+    </span>
   )
 }
 

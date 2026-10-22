@@ -5,6 +5,30 @@ export function progressKey(week: number, category: string): string {
   return `${week}-${category}`
 }
 
+/** Move checkmarks stored under `from` onto `to`. Other keys stay put. */
+export function renameCategoryProgress(
+  progress: Record<string, ProgressState>,
+  from: string,
+  to: string,
+): Record<string, ProgressState> {
+  if (from === to) return progress
+  const next: Record<string, ProgressState> = {}
+  for (const [key, state] of Object.entries(progress)) {
+    const dash = key.indexOf('-')
+    const week = dash > 0 ? key.slice(0, dash) : ''
+    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) continue
+    next[key] = state
+  }
+  for (const [key, state] of Object.entries(progress)) {
+    const dash = key.indexOf('-')
+    const week = dash > 0 ? key.slice(0, dash) : ''
+    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) {
+      next[progressKey(Number(week), to)] = state
+    }
+  }
+  return next
+}
+
 export function getProgress(subject: Subject, week: number, category: string): ProgressState {
   return subject.progress[progressKey(week, category)] ?? 'pending'
 }

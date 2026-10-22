@@ -17,11 +17,31 @@ import { createId } from '../lib/id'
 /** Shorter sessions are treated as accidental taps and not logged. */
 const MIN_SESSION_MS = 1000
 
+function withRenamedCategories<T extends { categories: string[] }>(
+  item: T,
+  renames: Record<string, string>,
+): T {
+  let changed = false
+  const seen = new Set<string>()
+  const categories: string[] = []
+  for (const name of item.categories) {
+    const next = renames[name] ?? name
+    if (next !== name) changed = true
+    if (seen.has(next)) {
+      changed = true
+      continue
+    }
+    seen.add(next)
+    categories.push(next)
+  }
+  return changed ? { ...item, categories } : item
+}
+
 interface PlannerStore {
   data: PlannerData
   settings: Settings
   subjects: Subject[]
-  upsertSubject: (subject: Subject) => void
+  upsertSubject: (subject: Subject, categoryRenames?: Record<string, string>) => void
   addSubjects: (subjects: Subject[]) => void
   deleteSubject: (id: string) => void
   setProgress: (subjectId: string, week: number, category: string, state: ProgressState) => void
@@ -65,14 +85,26 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const upsertSubject = useCallback((subject: Subject) => {
+  const upsertSubject = useCallback((subject: Subject, categoryRenames?: Record<string, string>) => {
+    const renames = Object.fromEntries(
+      Object.entries(categoryRenames ?? {}).filter(([from, to]) => from !== to && to.trim() !== ''),
+    )
     setData((prev) => {
       const exists = prev.subjects.some((s) => s.id === subject.id)
+      const subjects = exists
+        ? prev.subjects.map((s) => (s.id === subject.id ? subject : s))
+        : [...prev.subjects, subject]
+      if (Object.keys(renames).length === 0) return { ...prev, subjects }
       return {
         ...prev,
-        subjects: exists
-          ? prev.subjects.map((s) => (s.id === subject.id ? subject : s))
-          : [...prev.subjects, subject],
+        subjects,
+        studySessions: prev.studySessions.map((session) =>
+          session.subjectId === subject.id ? withRenamedCategories(session, renames) : session,
+        ),
+        activeStudy:
+          prev.activeStudy?.subjectId === subject.id
+            ? withRenamedCategories(prev.activeStudy, renames)
+            : prev.activeStudy,
       }
     })
   }, [])

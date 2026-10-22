@@ -306,8 +306,8 @@ export function AppShell() {
         subject={editing}
         defaultWeek={week}
         onClose={() => setEditing(null)}
-        onSave={(s) => {
-          upsertSubject(s)
+        onSave={(s, renames) => {
+          upsertSubject(s, renames)
           setEditing(null)
         }}
         onDelete={(id) => {
