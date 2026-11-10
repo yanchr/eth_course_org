@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Settings as SettingsIcon, Timer } from 'lucide-react'
+import { CalendarClock, Plus, Settings as SettingsIcon, Timer } from 'lucide-react'
 import type { Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
 import { useFitsWeekCalendar, useIsDesktop } from '../../hooks/useMediaQuery'
@@ -21,6 +21,7 @@ import { SubjectDetailDrawer } from '../SubjectDetailDrawer'
 import { SubjectEditor, type EditorTarget } from '../SubjectEditor'
 import { SettingsDrawer } from '../SettingsDrawer'
 import { StudyView } from '../StudyView'
+import { DayPlannerView } from '../DayPlannerView'
 import { BottomNav, type MobileTab } from './BottomNav'
 import { ClearCelebration } from '../ClearCelebration'
 
@@ -66,6 +67,7 @@ export function AppShell() {
   const openSubject = (subject: Subject, slotId?: string) => setDetail({ id: subject.id, slotId })
   const hasSubjects = subjects.length > 0
   const studying = tab === 'study'
+  const planning = tab === 'plan'
   const activeRunning = data.activeStudy?.resumedAt != null
   const now = useNow(!!data.activeStudy && activeRunning)
   const todayStudyMs = studiedTodayMs(data.studySessions, data.activeStudy, now)
@@ -160,6 +162,15 @@ export function AppShell() {
             >
               Study
             </Button>
+            <Button
+              variant={planning ? 'secondary' : 'ghost'}
+              size="sm"
+              icon={<CalendarClock className="size-4" />}
+              aria-pressed={planning}
+              onClick={() => setTab(planning ? 'week' : 'plan')}
+            >
+              Plan
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => setEditing('calendar')}>
               Calendar
             </Button>
@@ -175,7 +186,7 @@ export function AppShell() {
           <SettingsIcon className="size-5" />
         </IconButton>
       </div>
-      {hasSubjects && !studying && (isDesktop || tab !== 'subjects') && (
+      {hasSubjects && !studying && !planning && (isDesktop || tab !== 'subjects') && (
         <div className="mx-auto max-w-[1600px] px-4 pb-3 lg:px-8">
           <WeekPicker
             weekCount={weekCount}
@@ -203,6 +214,12 @@ export function AppShell() {
     content = (
       <div className="mx-auto w-full max-w-3xl px-8 py-6">
         <StudyView defaultWeek={todayWeek} />
+      </div>
+    )
+  } else if (isDesktop && planning) {
+    content = (
+      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col px-4 py-3 lg:px-8 lg:py-4">
+        <DayPlannerView />
       </div>
     )
   } else if (isDesktop) {
@@ -236,8 +253,8 @@ export function AppShell() {
       <div
         className={cn(
           'mx-auto flex w-full flex-col gap-3 px-4',
-          tab === 'schedule' ? 'min-h-0 flex-1 pt-3' : 'pt-4',
-          weekCalendar && tab === 'schedule' ? 'max-w-5xl' : 'max-w-lg',
+          tab === 'schedule' || tab === 'plan' ? 'min-h-0 flex-1 pt-3' : 'pt-4',
+          weekCalendar && (tab === 'schedule' || tab === 'plan') ? 'max-w-5xl' : 'max-w-lg',
         )}
       >
         {tab === 'week' && (
@@ -272,11 +289,12 @@ export function AppShell() {
           />
         )}
         {tab === 'study' && <StudyView defaultWeek={todayWeek} />}
+        {tab === 'plan' && <DayPlannerView />}
       </div>
     )
   }
 
-  const scheduleFills = !isDesktop && hasSubjects && tab === 'schedule'
+  const fillsViewport = hasSubjects && (planning || (!isDesktop && tab === 'schedule'))
 
   return (
     <div className="flex h-dvh flex-col">
@@ -284,7 +302,7 @@ export function AppShell() {
       <main
         className={cn(
           'flex min-h-0 flex-1 flex-col',
-          scheduleFills ? 'overflow-hidden' : 'overflow-y-auto',
+          fillsViewport ? 'overflow-hidden' : 'overflow-y-auto',
           !isDesktop && hasSubjects && 'pb-[calc(6.5rem+env(safe-area-inset-bottom))]',
         )}
       >

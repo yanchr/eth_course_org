@@ -8,11 +8,26 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import type { PlannerData, ProgressState, Settings, StudySession, Subject } from '../types'
-import { STORAGE_KEY, createDefaultData, loadData, saveData } from '../lib/storage'
+import type {
+  ActivityPreset,
+  DayPlanState,
+  PlannerData,
+  ProgressState,
+  Settings,
+  StudySession,
+  Subject,
+} from '../types'
+import {
+  STORAGE_KEY,
+  createDefaultData,
+  createDefaultDayPlan,
+  loadData,
+  saveData,
+} from '../lib/storage'
 import { progressKey } from '../lib/progress'
 import { activeElapsedMs } from '../lib/study'
 import { createId } from '../lib/id'
+import { toISODate } from '../lib/semester'
 
 /** Shorter sessions are treated as accidental taps and not logged. */
 const MIN_SESSION_MS = 1000
@@ -46,6 +61,8 @@ interface PlannerStore {
   deleteSubject: (id: string) => void
   setProgress: (subjectId: string, week: number, category: string, state: ProgressState) => void
   startStudy: (subjectId: string, week: number, categories: string[]) => void
+  /** Stops the current session (if any) and starts a new one in a single write. */
+  switchStudy: (subjectId: string, week: number, categories: string[]) => void
   pauseStudy: () => void
   resumeStudy: () => void
   stopStudy: () => void
@@ -54,6 +71,10 @@ interface PlannerStore {
   updateStudySession: (session: StudySession) => void
   deleteStudySession: (id: string) => void
   updateSettings: (patch: Partial<Settings>) => void
+  updateDayPlan: (patch: Partial<DayPlanState> | ((prev: DayPlanState) => DayPlanState)) => void
+  resetDayPlan: (date?: string) => void
+  upsertActivityPreset: (preset: ActivityPreset) => void
+  deleteActivityPreset: (id: string) => void
   replaceData: (data: PlannerData) => void
   resetData: () => void
 }
@@ -105,6 +126,12 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
           prev.activeStudy?.subjectId === subject.id
             ? withRenamedCategories(prev.activeStudy, renames)
             : prev.activeStudy,
+        dayPlan: {
+          ...prev.dayPlan,
+          todoQueue: prev.dayPlan.todoQueue.map((item) =>
+            item.subjectId === subject.id ? withRenamedCategories(item, renames) : item,
+          ),
+        },
       }
     })
   }, [])
@@ -115,7 +142,14 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const deleteSubject = useCallback((id: string) => {
-    setData((prev) => ({ ...prev, subjects: prev.subjects.filter((s) => s.id !== id) }))
+    setData((prev) => ({
+      ...prev,
+      subjects: prev.subjects.filter((s) => s.id !== id),
+      dayPlan: {
+        ...prev.dayPlan,
+        todoQueue: prev.dayPlan.todoQueue.filter((item) => item.subjectId !== id),
+      },
+    }))
   }, [])
 
   const setProgress = useCallback(
@@ -148,6 +182,36 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       ...prev,
       activeStudy: { subjectId, week, categories, startedAt: now, accumulatedMs: 0, resumedAt: now },
     }))
+  }, [])
+
+  const switchStudy = useCallback((subjectId: string, week: number, categories: string[]) => {
+    const now = Date.now()
+    setData((prev) => {
+      let studySessions = prev.studySessions
+      const active = prev.activeStudy
+      if (active) {
+        const durationMs = activeElapsedMs(active, now)
+        if (durationMs >= MIN_SESSION_MS) {
+          studySessions = [
+            ...studySessions,
+            {
+              id: createId(),
+              subjectId: active.subjectId,
+              week: active.week,
+              categories: active.categories,
+              durationMs,
+              startedAt: new Date(active.startedAt).toISOString(),
+              endedAt: new Date(now).toISOString(),
+            },
+          ]
+        }
+      }
+      return {
+        ...prev,
+        studySessions,
+        activeStudy: { subjectId, week, categories, startedAt: now, accumulatedMs: 0, resumedAt: now },
+      }
+    })
   }, [])
 
   /** Moves the start of the running recording; the elapsed time shifts by the same amount. */
@@ -233,6 +297,56 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
     setData((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }))
   }, [])
 
+  const updateDayPlan = useCallback(
+    (patch: Partial<DayPlanState> | ((prev: DayPlanState) => DayPlanState)) => {
+      setData((prev) => ({
+        ...prev,
+        dayPlan: typeof patch === 'function' ? patch(prev.dayPlan) : { ...prev.dayPlan, ...patch },
+      }))
+    },
+    [],
+  )
+
+  const resetDayPlan = useCallback((date?: string) => {
+    setData((prev) => ({
+      ...prev,
+      dayPlan: createDefaultDayPlan(prev.activityPresets, date ?? toISODate(new Date())),
+    }))
+  }, [])
+
+  const upsertActivityPreset = useCallback((preset: ActivityPreset) => {
+    setData((prev) => {
+      const exists = prev.activityPresets.some((p) => p.id === preset.id)
+      const activityPresets = exists
+        ? prev.activityPresets.map((p) => (p.id === preset.id ? preset : p))
+        : [...prev.activityPresets, preset]
+      let selectedPresetIds = prev.dayPlan.selectedPresetIds
+      if (preset.isDefault && !selectedPresetIds.includes(preset.id)) {
+        selectedPresetIds = [...selectedPresetIds, preset.id]
+      }
+      return {
+        ...prev,
+        activityPresets,
+        dayPlan: { ...prev.dayPlan, selectedPresetIds },
+      }
+    })
+  }, [])
+
+  const deleteActivityPreset = useCallback((id: string) => {
+    setData((prev) => ({
+      ...prev,
+      activityPresets: prev.activityPresets.filter((p) => p.id !== id),
+      dayPlan: {
+        ...prev.dayPlan,
+        selectedPresetIds: prev.dayPlan.selectedPresetIds.filter((pid) => pid !== id),
+        customActivities: prev.dayPlan.customActivities.filter((a) => a.id !== id),
+        activityOverrides: prev.dayPlan.activityOverrides
+          ? Object.fromEntries(Object.entries(prev.dayPlan.activityOverrides).filter(([k]) => k !== id))
+          : undefined,
+      },
+    }))
+  }, [])
+
   const replaceData = useCallback((next: PlannerData) => setData(next), [])
   const resetData = useCallback(() => setData(createDefaultData()), [])
 
@@ -246,6 +360,7 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       deleteSubject,
       setProgress,
       startStudy,
+      switchStudy,
       pauseStudy,
       resumeStudy,
       stopStudy,
@@ -254,6 +369,10 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       updateStudySession,
       deleteStudySession,
       updateSettings,
+      updateDayPlan,
+      resetDayPlan,
+      upsertActivityPreset,
+      deleteActivityPreset,
       replaceData,
       resetData,
     }),
@@ -264,6 +383,7 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       deleteSubject,
       setProgress,
       startStudy,
+      switchStudy,
       pauseStudy,
       resumeStudy,
       stopStudy,
@@ -272,6 +392,10 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
       updateStudySession,
       deleteStudySession,
       updateSettings,
+      updateDayPlan,
+      resetDayPlan,
+      upsertActivityPreset,
+      deleteActivityPreset,
       replaceData,
       resetData,
     ],

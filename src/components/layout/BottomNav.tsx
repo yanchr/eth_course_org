@@ -1,13 +1,14 @@
-import { BookOpen, CalendarDays, ListChecks, Timer, type LucideIcon } from 'lucide-react'
+import { BookOpen, CalendarClock, CalendarDays, ListChecks, Timer, type LucideIcon } from 'lucide-react'
 import { cn } from '../../lib/cn'
 
-export type MobileTab = 'week' | 'schedule' | 'subjects' | 'study'
+export type MobileTab = 'week' | 'schedule' | 'subjects' | 'study' | 'plan'
 
 const TABS: { id: MobileTab; label: string; icon: LucideIcon }[] = [
   { id: 'week', label: 'Week', icon: ListChecks },
   { id: 'schedule', label: 'Schedule', icon: CalendarDays },
   { id: 'subjects', label: 'Subjects', icon: BookOpen },
   { id: 'study', label: 'Study', icon: Timer },
+  { id: 'plan', label: 'Plan', icon: CalendarClock },
 ]
 
 interface BottomNavProps {

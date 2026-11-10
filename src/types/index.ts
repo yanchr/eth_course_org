@@ -76,12 +76,64 @@ export interface ActiveStudy {
   resumedAt: number | null
 }
 
+export type ActivityColor = 'amber' | 'sky' | 'violet' | 'rose' | 'zinc'
+
+export type ActivityAnchor =
+  | { type: 'fixed'; time: string }
+  | { type: 'start'; priority: number }
+  | { type: 'end'; priority: number }
+  | { type: 'after'; activityId: string }
+
+export interface ActivityPreset {
+  id: string
+  name: string
+  durationMinutes: number
+  anchor: ActivityAnchor
+  isDefault: boolean
+  color?: ActivityColor
+}
+
+export interface PlannedTodoItem {
+  id: string
+  subjectId: string
+  week: number
+  /** 1 category for a single todo; >=2 for combined todos displayed as "A ^ B". */
+  categories: string[]
+  /** Set when the user resizes the block to override the statistical estimate. */
+  customDurationMinutes?: number
+  /** When true, target duration includes +1 SD. Defaults to true. */
+  includeSdBuffer: boolean
+}
+
+export interface ActivityOverride {
+  durationMinutes?: number
+  /** HH:MM override for fixed-anchor activities. */
+  time?: string
+}
+
+export interface DayPlanState {
+  /** YYYY-MM-DD */
+  date: string
+  /** HH:MM */
+  dayStartTime: string
+  selectedPresetIds: string[]
+  /** One-off activities or imported ETH class slots for this day. */
+  customActivities: ActivityPreset[]
+  todoQueue: PlannedTodoItem[]
+  /** Keyed by break slot id from the scheduler. */
+  breakOverrides?: Record<string, number>
+  /** Day-scoped duration/time edits for reusable presets (and customs). */
+  activityOverrides?: Record<string, ActivityOverride>
+}
+
 export interface PlannerData {
   version: 1
   settings: Settings
   subjects: Subject[]
   studySessions: StudySession[]
   activeStudy: ActiveStudy | null
+  activityPresets: ActivityPreset[]
+  dayPlan: DayPlanState
 }
 
 export const DAYS: Day[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']

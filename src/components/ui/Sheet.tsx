@@ -18,6 +18,8 @@ interface SheetProps {
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
+const openSheets: symbol[] = []
+
 /** Bottom sheet on mobile, right-side drawer on lg+. Traps focus and locks scroll. */
 export function Sheet({ open, onClose, title, subtitle, children, footer, width = 'md' }: SheetProps) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -27,6 +29,8 @@ export function Sheet({ open, onClose, title, subtitle, children, footer, width 
 
   useEffect(() => {
     if (!open) return
+    const token = Symbol()
+    openSheets.push(token)
     const previouslyFocused = document.activeElement as HTMLElement | null
     const { overflow } = document.body.style
     document.body.style.overflow = 'hidden'
@@ -36,6 +40,7 @@ export function Sheet({ open, onClose, title, subtitle, children, footer, width 
     first?.focus()
 
     const onKey = (e: KeyboardEvent) => {
+      if (openSheets[openSheets.length - 1] !== token) return
       if (e.key === 'Escape') {
         e.stopPropagation()
         onCloseRef.current()
@@ -56,6 +61,8 @@ export function Sheet({ open, onClose, title, subtitle, children, footer, width 
     }
     document.addEventListener('keydown', onKey)
     return () => {
+      const index = openSheets.indexOf(token)
+      if (index !== -1) openSheets.splice(index, 1)
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = overflow
       previouslyFocused?.focus?.()
