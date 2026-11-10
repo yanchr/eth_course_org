@@ -156,6 +156,23 @@ function todoSubtitle(block: TodoBlock): string {
   return `${formatBlockRange(block.start, block.end)} · ${block.workMinutes}m work${breaks}`
 }
 
+/** Todos in the queue that the day can finish. A truncated block does not finish today. */
+function todosExpectedToday(queue: { id: string }[], blocks: TimelineBlock[]): string {
+  const placed = new Set<string>()
+  const unfinished = new Set<string>()
+  for (const block of blocks) {
+    if (block.kind !== 'todo') continue
+    placed.add(block.todoId)
+    if (block.truncated) unfinished.add(block.todoId)
+  }
+  const queued = queue.length
+  const expected = queue.filter((todo) => placed.has(todo.id) && !unfinished.has(todo.id)).length
+  if (queued === 0 || expected === queued) {
+    return `${expected} ${expected === 1 ? 'todo' : 'todos'}`
+  }
+  return `${expected} of ${queued} todos`
+}
+
 export function Timeline({
   dayPlan,
   presets,
@@ -364,9 +381,14 @@ export function Timeline({
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xs">
       <div className="flex shrink-0 items-center gap-1 border-b border-zinc-200 bg-white px-2 py-1.5">
-        <p className="tabular min-w-0 flex-1 truncate px-1 text-xs font-medium text-zinc-600">
-          Start {dayPlan.dayStartTime} · Ends {formatMinutes(Math.min(endsAt, DAY_END_MINUTES))}
-          {liveBadge && <span className="text-zinc-900"> · {liveBadge}</span>}
+        <p className="min-w-0 flex-1 px-1 text-xs font-medium leading-snug text-zinc-600">
+          <span className="tabular block truncate">
+            Start {dayPlan.dayStartTime} · Ends {formatMinutes(Math.min(endsAt, DAY_END_MINUTES))}
+            {liveBadge && <span className="text-zinc-900"> · {liveBadge}</span>}
+          </span>
+          <span className="tabular block truncate text-zinc-900">
+            {todosExpectedToday(draftPlan.todoQueue, blocks)}
+          </span>
         </p>
         <button
           type="button"
