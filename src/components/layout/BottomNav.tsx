@@ -19,7 +19,7 @@ export function BottomNav({ tab, onChange }: BottomNavProps) {
   return (
     <nav
       aria-label="Primary"
-      className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 bg-white/90 backdrop-blur-md"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 bg-white/90 pb-[calc(2.5rem+env(safe-area-inset-bottom))] backdrop-blur-md"
     >
       <div className="mx-auto flex max-w-lg">
         {TABS.map(({ id, label, icon: Icon }) => {

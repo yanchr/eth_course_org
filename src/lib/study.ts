@@ -145,6 +145,27 @@ export function formatSessionSpan(startedAt: string, endedAt: string): string {
   return `${day} ${date} · ${toTimeInput(start)}–${toTimeInput(end)}`
 }
 
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+}
+
+/** Active study time attributed to the local calendar day of `now`. */
+export function studiedTodayMs(
+  sessions: StudySession[],
+  active: ActiveStudy | null,
+  now = Date.now(),
+): number {
+  const today = localDayKey(new Date(now))
+  let ms = 0
+  for (const s of sessions) {
+    if (localDayKey(new Date(s.startedAt)) === today) ms += s.durationMs
+  }
+  if (active && localDayKey(new Date(active.startedAt)) === today) {
+    ms += activeElapsedMs(active, now)
+  }
+  return ms
+}
+
 /** "1h 12m", "8m", "<1m" */
 export function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60000)

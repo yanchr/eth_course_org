@@ -19,15 +19,28 @@ import { toISODate } from '../lib/semester'
 import { cn } from '../lib/cn'
 import { Button } from './ui/Button'
 import { inputClass } from './ui/Field'
+import { Pill } from './ui/Pill'
 import { SegmentedControl } from './layout/SegmentedControl'
 import { StudySessionSheet, type SessionSheetTarget } from './StudySessionSheet'
 
 type StudySort = 'time' | 'week' | 'course'
+type TimeBucket = 'lt1' | '1-2' | '2-3' | '3-4' | 'gt4'
+
+const HOUR = 60 * 60 * 1000
+const ALL_FILTER = 'all'
 
 const SORT_OPTIONS: { value: StudySort; label: string }[] = [
   { value: 'time', label: 'Time' },
   { value: 'week', label: 'Week' },
   { value: 'course', label: 'Course' },
+]
+
+const TIME_FILTERS: { value: TimeBucket; label: string; match: (ms: number) => boolean }[] = [
+  { value: 'lt1', label: '<1h', match: (ms) => ms < HOUR },
+  { value: '1-2', label: '1–2h', match: (ms) => ms >= HOUR && ms < 2 * HOUR },
+  { value: '2-3', label: '2–3h', match: (ms) => ms >= 2 * HOUR && ms < 3 * HOUR },
+  { value: '3-4', label: '3–4h', match: (ms) => ms >= 3 * HOUR && ms < 4 * HOUR },
+  { value: 'gt4', label: '>4h', match: (ms) => ms >= 4 * HOUR },
 ]
 
 const byName = (name: (id: string) => string, a: string, b: string) =>
@@ -37,6 +50,13 @@ function compareTasks(a: TaskTime, b: TaskTime, sort: StudySort, name: (id: stri
   if (sort === 'week') return b.week - a.week || b.ms - a.ms || byName(name, a.subjectId, b.subjectId)
   if (sort === 'course') return byName(name, a.subjectId, b.subjectId) || a.category.localeCompare(b.category) || b.week - a.week
   return b.ms - a.ms || b.week - a.week || byName(name, a.subjectId, b.subjectId)
+}
+
+function matchesTaskFilter(task: TaskTime, sort: StudySort, filter: string): boolean {
+  if (filter === ALL_FILTER) return true
+  if (sort === 'time') return TIME_FILTERS.find((f) => f.value === filter)?.match(task.ms) ?? true
+  if (sort === 'week') return String(task.week) === filter
+  return task.subjectId === filter
 }
 
 function compareSessions(a: StudySession, b: StudySession, sort: StudySort, name: (id: string) => string): number {
@@ -54,13 +74,32 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
   const { activeStudy, studySessions } = data
   const [sheet, setSheet] = useState<SessionSheetTarget | null>(null)
   const [taskSort, setTaskSort] = useState<StudySort>('time')
+  const [taskFilter, setTaskFilter] = useState(ALL_FILTER)
   const [sessionSort, setSessionSort] = useState<StudySort>('week')
   const subjectName = (id: string) => subjects.find((s) => s.id === id)?.name ?? 'Removed course'
   const stats = useMemo(() => studyStats(studySessions), [studySessions])
+  const taskFilterOptions = useMemo(() => {
+    if (taskSort === 'time') {
+      return TIME_FILTERS.map((f) => ({ value: f.value, label: f.label }))
+    }
+    if (taskSort === 'week') {
+      const weeks = [...new Set(stats.tasks.map((t) => t.week))].sort((a, b) => a - b)
+      return weeks.map((week) => ({ value: String(week), label: `W${week}` }))
+    }
+    const ids = [...new Set(stats.tasks.map((t) => t.subjectId))].sort((a, b) => byName(subjectName, a, b))
+    return ids.map((id) => ({ value: id, label: subjectName(id) }))
+  }, [taskSort, stats.tasks, subjects])
   const tasks = useMemo(
-    () => [...stats.tasks].sort((a, b) => compareTasks(a, b, taskSort, subjectName)),
-    [stats.tasks, taskSort, subjects],
+    () =>
+      [...stats.tasks]
+        .filter((t) => matchesTaskFilter(t, taskSort, taskFilter))
+        .sort((a, b) => compareTasks(a, b, taskSort, subjectName)),
+    [stats.tasks, taskSort, taskFilter, subjects],
   )
+  const changeTaskSort = (next: StudySort) => {
+    setTaskSort(next)
+    setTaskFilter(ALL_FILTER)
+  }
   const sessions = useMemo(
     () => [...studySessions].sort((a, b) => compareSessions(a, b, sessionSort, subjectName)),
     [studySessions, sessionSort, subjects],
@@ -161,25 +200,49 @@ export function StudyView({ defaultWeek }: StudyViewProps) {
               </p>
             ) : (
               <ul className="divide-y divide-zinc-100">
-                <li className="px-3 py-3">
+                <li className="flex flex-col gap-2 px-3 py-3">
                   <SegmentedControl
                     label="Sort tasks"
                     options={SORT_OPTIONS}
                     value={taskSort}
-                    onChange={setTaskSort}
+                    onChange={changeTaskSort}
                   />
+                  <div
+                    role="group"
+                    aria-label={`Filter by ${taskSort}`}
+                    className="scrollbar-none -mx-1 flex gap-1.5 overflow-x-auto px-1"
+                  >
+                    <Pill active={taskFilter === ALL_FILTER} onClick={() => setTaskFilter(ALL_FILTER)} className="h-11">
+                      All
+                    </Pill>
+                    {taskFilterOptions.map((option) => (
+                      <Pill
+                        key={option.value}
+                        active={taskFilter === option.value}
+                        onClick={() => setTaskFilter(option.value)}
+                        className="h-11 max-w-40 truncate"
+                        title={option.label}
+                      >
+                        {option.label}
+                      </Pill>
+                    ))}
+                  </div>
                 </li>
-                {tasks.map((t) => (
-                  <li key={`${t.subjectId}-${t.week}-${t.category}`} className="flex items-baseline gap-3 px-4 py-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-zinc-900">{t.category}</div>
-                      <div className="truncate text-xs text-zinc-500">
-                        {subjectName(t.subjectId)} · week {t.week}
+                {tasks.length === 0 ? (
+                  <li className="px-4 py-6 text-center text-sm text-zinc-400">No tasks match this filter.</li>
+                ) : (
+                  tasks.map((t) => (
+                    <li key={`${t.subjectId}-${t.week}-${t.category}`} className="flex items-baseline gap-3 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-zinc-900">{t.category}</div>
+                        <div className="truncate text-xs text-zinc-500">
+                          {subjectName(t.subjectId)} · week {t.week}
+                        </div>
                       </div>
-                    </div>
-                    <span className="tabular text-sm font-semibold text-zinc-900">{formatDuration(t.ms)}</span>
-                  </li>
-                ))}
+                      <span className="tabular text-sm font-semibold text-zinc-900">{formatDuration(t.ms)}</span>
+                    </li>
+                  ))
+                )}
               </ul>
             )}
           </Panel>

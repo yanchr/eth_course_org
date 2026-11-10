@@ -37,6 +37,8 @@ export interface Subject {
   categories: string[]
   /** keyed by `${weekNumber}-${category}` */
   progress: Record<string, ProgressState>
+  /** ISO timestamps for when a to-do was marked completed; keyed like `progress`. */
+  completedAt?: Record<string, string>
   /** One-off to-dos added onto this subject. Each exists only in its week. */
   events?: SubjectEvent[]
   /** When set, this is a one-off event that only exists in that semester week. */

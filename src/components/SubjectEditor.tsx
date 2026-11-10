@@ -9,7 +9,7 @@ import {
   type SubjectLink,
 } from '../types'
 import { createId } from '../lib/id'
-import { progressKey, renameCategoryProgress } from '../lib/progress'
+import { progressKey, renameCategoryKeys, renameCategoryProgress } from '../lib/progress'
 import { createCalendarItem, createEvent, createSubject, isCalendar, isOnce, withEvent } from '../lib/subjects'
 import { parseRoom } from '../lib/campus'
 import { DAY_LABEL, normalizeSlotType, slotLabel } from '../lib/schedule'
@@ -155,9 +155,13 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
       return false
     }
     rememberRename(edit.from, name)
+    const completedAt = draftRef.current.completedAt
+      ? renameCategoryKeys(draftRef.current.completedAt, edit.from, name)
+      : undefined
     patch({
       categories: draftRef.current.categories.map((c) => (c === edit.from ? name : c)),
       progress: renameCategoryProgress(draftRef.current.progress, edit.from, name),
+      completedAt: completedAt && Object.keys(completedAt).length > 0 ? completedAt : undefined,
     })
     closeCategoryEdit()
     return true
@@ -219,10 +223,17 @@ function EditorForm({ initial, isNew, defaultWeek, onCancel, onSave, onDelete }:
   }
 
   const removeEvent = (event: SubjectEvent) => {
+    const key = progressKey(event.week, event.name)
     const progress = { ...draft.progress }
-    delete progress[progressKey(event.week, event.name)]
+    delete progress[key]
+    const completedAt = { ...(draft.completedAt ?? {}) }
+    delete completedAt[key]
     const events = (draft.events ?? []).filter((item) => item.id !== event.id)
-    patch({ events: events.length > 0 ? events : undefined, progress })
+    patch({
+      events: events.length > 0 ? events : undefined,
+      progress,
+      completedAt: Object.keys(completedAt).length > 0 ? completedAt : undefined,
+    })
   }
 
   const submit = (e: FormEvent) => {

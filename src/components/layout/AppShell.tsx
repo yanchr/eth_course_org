@@ -4,8 +4,8 @@ import type { Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
 import { useFitsWeekCalendar, useIsDesktop } from '../../hooks/useMediaQuery'
 import { currentWeek, formatWeekRange, parseISODate, rawWeekIndex } from '../../lib/semester'
-import { sortByWeekOutstanding, weekCompletions } from '../../lib/progress'
-import { activeElapsedMs, formatClock, formatDuration, studyStats } from '../../lib/study'
+import { completedTodayCount, sortByWeekOutstanding, weekCompletions } from '../../lib/progress'
+import { activeElapsedMs, formatClock, formatDuration, studiedTodayMs } from '../../lib/study'
 import { useNow } from '../../hooks/useNow'
 import { cn } from '../../lib/cn'
 import { Button } from '../ui/Button'
@@ -66,10 +66,10 @@ export function AppShell() {
   const openSubject = (subject: Subject, slotId?: string) => setDetail({ id: subject.id, slotId })
   const hasSubjects = subjects.length > 0
   const studying = tab === 'study'
-  const avgPerTask = useMemo(() => {
-    const s = studyStats(data.studySessions)
-    return s.tasks.length ? s.avgPerTaskMs : null
-  }, [data.studySessions])
+  const activeRunning = data.activeStudy?.resumedAt != null
+  const now = useNow(!!data.activeStudy && activeRunning)
+  const todayStudyMs = studiedTodayMs(data.studySessions, data.activeStudy, now)
+  const todayDone = completedTodayCount(subjects)
 
   const status = inSemester
     ? `Week ${todayWeek} of ${weekCount}`
@@ -124,27 +124,26 @@ export function AppShell() {
             className={cn(
               'tabular flex shrink-0 flex-col items-center rounded-full px-2.5 py-1 text-xs leading-tight font-semibold',
               'transition-colors duration-150 ease-out',
-              avgPerTask !== null && 'rounded-2xl',
+              'rounded-2xl',
               open > 0 ? 'bg-zinc-100 text-zinc-700' : 'bg-emerald-500/10 text-emerald-700',
             )}
             aria-label={[
               open > 0
                 ? `${open} item${open === 1 ? '' : 's'} still to do by the end of week ${dueThroughWeek}`
                 : `Nothing left to do through week ${dueThroughWeek}`,
-              avgPerTask !== null ? `${formatDuration(avgPerTask)} average study time per to-do` : '',
-            ]
-              .filter(Boolean)
-              .join('. ')}
+              `${todayDone} finished today`,
+              `${formatDuration(todayStudyMs)} studied today`,
+            ].join('. ')}
             title={
               carriedOver > 0
-                ? `${openThisWeek} open this week · ${carriedOver} from earlier weeks`
-                : `${openThisWeek} open this week`
+                ? `${openThisWeek} open this week · ${carriedOver} from earlier weeks · ${todayDone} done today · ${formatDuration(todayStudyMs)} studied`
+                : `${openThisWeek} open this week · ${todayDone} done today · ${formatDuration(todayStudyMs)} studied`
             }
           >
             <span>{open > 0 ? `${open} to do` : 'All done'}</span>
-            {avgPerTask !== null && (
-              <span className="text-[10px] font-medium opacity-70">{formatDuration(avgPerTask)} avg</span>
-            )}
+            <span className="text-[10px] font-medium opacity-70">
+              {todayDone} done · {formatDuration(todayStudyMs)}
+            </span>
           </span>
         )}
         {hasSubjects && data.activeStudy && !studying && (
@@ -286,7 +285,7 @@ export function AppShell() {
         className={cn(
           'flex min-h-0 flex-1 flex-col',
           scheduleFills ? 'overflow-hidden' : 'overflow-y-auto',
-          !isDesktop && hasSubjects && 'pb-[calc(4rem+env(safe-area-inset-bottom))]',
+          !isDesktop && hasSubjects && 'pb-[calc(6.5rem+env(safe-area-inset-bottom))]',
         )}
       >
         {content}

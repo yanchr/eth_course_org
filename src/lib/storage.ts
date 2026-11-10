@@ -78,6 +78,15 @@ function parseSubject(raw: unknown): Subject | null {
     }
   }
 
+  const completedAt: Record<string, string> = {}
+  if (isObject(raw.completedAt)) {
+    for (const [key, value] of Object.entries(raw.completedAt)) {
+      if (typeof value !== 'string' || progress[key] !== 'completed') continue
+      const at = Date.parse(value)
+      if (!Number.isNaN(at)) completedAt[key] = new Date(at).toISOString()
+    }
+  }
+
   const calendarOnly = raw.calendarOnly === true
   const events = Array.isArray(raw.events) ? raw.events.map(parseEvent).filter((e) => e !== null) : []
 
@@ -91,6 +100,7 @@ function parseSubject(raw: unknown): Subject | null {
       : [],
     categories: calendarOnly ? categories : categories.length ? categories : [...DEFAULT_CATEGORIES],
     progress,
+    ...(Object.keys(completedAt).length > 0 ? { completedAt } : {}),
     ...(events.length > 0 ? { events } : {}),
     ...(typeof raw.onceWeek === 'number' &&
     Number.isInteger(raw.onceWeek) &&

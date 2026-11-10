@@ -125,10 +125,17 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
         subjects: prev.subjects.map((s) => {
           if (s.id !== subjectId) return s
           const progress = { ...s.progress }
+          const completedAt = { ...(s.completedAt ?? {}) }
           const key = progressKey(week, category)
           if (state === 'pending') delete progress[key]
           else progress[key] = state
-          return { ...s, progress }
+          if (state === 'completed') completedAt[key] = new Date().toISOString()
+          else delete completedAt[key]
+          return {
+            ...s,
+            progress,
+            ...(Object.keys(completedAt).length > 0 ? { completedAt } : { completedAt: undefined }),
+          }
         }),
       }))
     },

@@ -5,28 +5,58 @@ export function progressKey(week: number, category: string): string {
   return `${week}-${category}`
 }
 
+/** Move values stored under category `from` onto `to`. Other keys stay put. */
+export function renameCategoryKeys<T>(
+  map: Record<string, T>,
+  from: string,
+  to: string,
+): Record<string, T> {
+  if (from === to) return map
+  const next: Record<string, T> = {}
+  for (const [key, value] of Object.entries(map)) {
+    const dash = key.indexOf('-')
+    const week = dash > 0 ? key.slice(0, dash) : ''
+    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) continue
+    next[key] = value
+  }
+  for (const [key, value] of Object.entries(map)) {
+    const dash = key.indexOf('-')
+    const week = dash > 0 ? key.slice(0, dash) : ''
+    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) {
+      next[progressKey(Number(week), to)] = value
+    }
+  }
+  return next
+}
+
 /** Move checkmarks stored under `from` onto `to`. Other keys stay put. */
 export function renameCategoryProgress(
   progress: Record<string, ProgressState>,
   from: string,
   to: string,
 ): Record<string, ProgressState> {
-  if (from === to) return progress
-  const next: Record<string, ProgressState> = {}
-  for (const [key, state] of Object.entries(progress)) {
-    const dash = key.indexOf('-')
-    const week = dash > 0 ? key.slice(0, dash) : ''
-    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) continue
-    next[key] = state
-  }
-  for (const [key, state] of Object.entries(progress)) {
-    const dash = key.indexOf('-')
-    const week = dash > 0 ? key.slice(0, dash) : ''
-    if (/^\d+$/.test(week) && key.slice(dash + 1) === from) {
-      next[progressKey(Number(week), to)] = state
+  return renameCategoryKeys(progress, from, to)
+}
+
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+}
+
+/** How many to-dos were marked completed on the local calendar day of `now`. */
+export function completedTodayCount(subjects: Subject[], now = Date.now()): number {
+  const today = localDayKey(new Date(now))
+  let count = 0
+  for (const subject of subjects) {
+    const stamps = subject.completedAt
+    if (!stamps) continue
+    for (const [key, iso] of Object.entries(stamps)) {
+      if (subject.progress[key] !== 'completed') continue
+      const at = Date.parse(iso)
+      if (Number.isNaN(at)) continue
+      if (localDayKey(new Date(at)) === today) count++
     }
   }
-  return next
+  return count
 }
 
 export function getProgress(subject: Subject, week: number, category: string): ProgressState {
