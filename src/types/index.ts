@@ -111,6 +111,8 @@ export interface PlannedTodoItem {
   snappedEndMinute?: number
   /** Statistical buffer applied to the historical standard deviation. Defaults to 1. */
   sdMultiplier: number
+  /** Internal work/break rhythm. Defaults to standard (50m/10m). */
+  breakStyle?: 'standard' | 'lecture'
   /** Defaults to flow for saved plans created before todo anchors were introduced. */
   anchor: BlockAnchor
 }
@@ -132,6 +134,8 @@ export interface DayPlanState {
   /** One-off activities or imported ETH class slots for this day. */
   customActivities: ActivityPreset[]
   todoQueue: PlannedTodoItem[]
+  /** Minimum work remaining before an internal break is inserted. Defaults to 30m. */
+  minBreakTailMinutes?: number
   /** Keyed by break slot id from the scheduler. */
   breakOverrides?: Record<string, number>
   /** Day-scoped duration/time edits for reusable presets (and customs). */

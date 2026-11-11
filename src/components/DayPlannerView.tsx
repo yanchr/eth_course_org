@@ -205,6 +205,7 @@ export function DayPlannerView() {
     updateDayPlan((prev) => ({
       date: prev.date,
       dayStartTime: prev.dayStartTime,
+      minBreakTailMinutes: prev.minBreakTailMinutes ?? 30,
       selectedPresetIds: activityPresets.filter((preset) => preset.isDefault).map((preset) => preset.id),
       customActivities: [],
       todoQueue: [],
@@ -256,6 +257,18 @@ export function DayPlannerView() {
               value={dayPlan.dayStartTime}
               onChange={(event) => updateDayPlan({ dayStartTime: event.target.value || '08:00' })}
             />
+            <Field
+              label="Min work left for break (min)"
+              type="number"
+              min={0}
+              step={5}
+              value={dayPlan.minBreakTailMinutes ?? 30}
+              onChange={(event) =>
+                updateDayPlan({
+                  minBreakTailMinutes: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                })
+              }
+            />
           </div>
 
           <div className="border-t border-zinc-100 pt-6">
@@ -263,6 +276,7 @@ export function DayPlannerView() {
               subjects={subjects}
               weekCount={settings.weekCount}
               defaultWeek={defaultWeek}
+              date={dayPlan.date}
               sessions={studySessions}
               todoQueue={dayPlan.todoQueue}
               activityTargets={[

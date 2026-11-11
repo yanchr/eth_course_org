@@ -70,6 +70,7 @@ export function createDefaultDayPlan(
   return {
     date,
     dayStartTime: '08:00',
+    minBreakTailMinutes: 30,
     selectedPresetIds: presets.filter((p) => p.isDefault).map((p) => p.id),
     customActivities: [],
     todoQueue: [],
@@ -288,6 +289,7 @@ function parsePlannedTodo(raw: unknown): PlannedTodoItem | null {
         : raw.includeSdBuffer === false
           ? 0
           : 1,
+    breakStyle: raw.breakStyle === 'lecture' ? 'lecture' : 'standard',
     anchor: parseAnchor(raw.anchor) ?? { type: 'flow' },
     ...(custom !== undefined ? { customDurationMinutes: custom } : {}),
     ...(snappedStart !== undefined && snappedEnd !== undefined && snappedEnd > snappedStart
@@ -358,6 +360,10 @@ function parseDayPlan(raw: unknown, presets: ActivityPreset[]): DayPlanState {
   return {
     date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : defaults.date,
     dayStartTime: HHMM.test(dayStartTime) ? dayStartTime : defaults.dayStartTime,
+    minBreakTailMinutes:
+      typeof raw.minBreakTailMinutes === 'number' && Number.isFinite(raw.minBreakTailMinutes)
+        ? Math.max(0, Math.round(raw.minBreakTailMinutes))
+        : 30,
     selectedPresetIds,
     customActivities,
     todoQueue,

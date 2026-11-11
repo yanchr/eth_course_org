@@ -11,6 +11,9 @@ import { formatMinutes, parseTimeRange } from './semester'
 
 export const WORK_BLOCK_MINUTES = 50
 export const DEFAULT_BREAK_MINUTES = 10
+export const LECTURE_WORK_BLOCK_MINUTES = 45
+export const LECTURE_BREAK_MINUTES = 15
+export const DEFAULT_MIN_BREAK_TAIL_MINUTES = 30
 export const MIN_FLOW_GAP_MINUTES = 20
 export const DAY_END_MINUTES = 1440
 
@@ -89,10 +92,29 @@ function parseHHMM(time: string): number | null {
   return parseTimeRange(time)?.start ?? null
 }
 
-/** Wall-clock span of uninterrupted todo work, including its internal break stripes. */
-export function todoTotalSpan(workMinutes: number): number {
+function todoRhythm(todo?: PlannedTodoItem): { work: number; break: number } {
+  return todo?.breakStyle === 'lecture'
+    ? { work: LECTURE_WORK_BLOCK_MINUTES, break: LECTURE_BREAK_MINUTES }
+    : { work: WORK_BLOCK_MINUTES, break: DEFAULT_BREAK_MINUTES }
+}
+
+/** Wall-clock span of uninterrupted todo work, including qualifying internal break stripes. */
+export function todoTotalSpan(
+  workMinutes: number,
+  breakStyle: PlannedTodoItem['breakStyle'] = 'standard',
+  minBreakTailMinutes = DEFAULT_MIN_BREAK_TAIL_MINUTES,
+): number {
   const work = Math.max(0, Math.round(workMinutes))
-  return work + Math.floor(Math.max(0, work - 1) / WORK_BLOCK_MINUTES) * DEFAULT_BREAK_MINUTES
+  const rhythm = todoRhythm({ breakStyle } as PlannedTodoItem)
+  let remaining = work
+  let span = 0
+  while (remaining > 0) {
+    const chunk = Math.min(rhythm.work, remaining)
+    span += chunk
+    remaining -= chunk
+    if (remaining >= minBreakTailMinutes) span += rhythm.break
+  }
+  return span
 }
 
 function activeItems(
@@ -134,7 +156,9 @@ function activeItems(
       id: todo.id,
       kind: 'todo',
       anchor: todo.anchor ?? { type: 'flow' },
-      duration: snappedDuration ?? todoTotalSpan(work),
+      duration:
+        snappedDuration ??
+        todoTotalSpan(work, todo.breakStyle, dayPlan.minBreakTailMinutes ?? DEFAULT_MIN_BREAK_TAIL_MINUTES),
       order,
       todo,
     }
@@ -165,20 +189,44 @@ function todoWorkBlock(todo: PlannedTodoItem, target: number, start: number, end
   }
 }
 
+function hasPreviousTodo(ctx: ScheduleContext, todoId: string, start: number): boolean {
+  return [...ctx.placed.values()].some(
+    (placement) => placement.kind === 'todo' && placement.id !== todoId && placement.end === start,
+  )
+}
+
 /** Render an anchored todo at an exact start, with internal break stripes. */
 function renderExactTodo(ctx: ScheduleContext, item: Schedulable, start: number): number {
   const todo = item.todo!
   const target = todoTargetMinutes(todo, ctx.sessions)
+  const rhythm = todoRhythm(todo)
+  const minTail = ctx.dayPlan.minBreakTailMinutes ?? DEFAULT_MIN_BREAK_TAIL_MINUTES
   let remaining = target
   let cursor = Math.max(0, start)
+  let initialBreak: TimelineBreak | undefined
+  if (hasPreviousTodo(ctx, todo.id, cursor) && cursor + DEFAULT_BREAK_MINUTES < DAY_END_MINUTES) {
+    const key = `break:${ctx.breakIndex++}`
+    initialBreak = { breakKey: key, start: cursor, end: cursor + DEFAULT_BREAK_MINUTES }
+    cursor += DEFAULT_BREAK_MINUTES
+  }
+  let firstWork = true
   while (remaining > 0 && cursor < DAY_END_MINUTES) {
-    const work = Math.min(WORK_BLOCK_MINUTES, remaining, DAY_END_MINUTES - cursor)
+    const work = Math.min(rhythm.work, remaining, DAY_END_MINUTES - cursor)
     if (work <= 0) break
-    ctx.blocks.push(todoWorkBlock(todo, target, cursor, cursor + work))
+    const block = todoWorkBlock(todo, target, cursor, cursor + work)
+    if (firstWork && initialBreak) {
+      block.start = initialBreak.start
+      block.breakMinutes = initialBreak.end - initialBreak.start
+      block.breaks = [initialBreak]
+    }
+    ctx.blocks.push(block)
+    firstWork = false
     cursor += work
     remaining -= work
-    if (remaining > 0 && cursor < DAY_END_MINUTES) {
-      const { key, duration } = nextBreak(ctx)
+    if (remaining >= minTail && cursor < DAY_END_MINUTES) {
+      const { key, duration: overrideDuration } = nextBreak(ctx)
+      const duration =
+        ctx.dayPlan.breakOverrides?.[key] === undefined ? rhythm.break : overrideDuration
       const end = Math.min(DAY_END_MINUTES, cursor + Math.max(0, duration))
       if (end > cursor) {
         ctx.blocks.push({ kind: 'break', id: key, breakKey: key, start: cursor, end })
@@ -202,24 +250,45 @@ function renderSnappedTodo(ctx: ScheduleContext, item: Schedulable): Placement {
     DAY_END_MINUTES,
     Math.max(start + 5, Math.min(todo.snappedEndMinute!, DAY_END_MINUTES)),
   )
-  const breaks: TimelineBreak[] = []
-  let cursor = start + WORK_BLOCK_MINUTES
-  while (cursor + DEFAULT_BREAK_MINUTES <= end) {
-    const breakEnd = cursor + DEFAULT_BREAK_MINUTES
-    if (breakEnd <= end) {
-      const key = `break:${ctx.breakIndex++}`
-      breaks.push({ breakKey: key, start: cursor, end: breakEnd })
-    }
-    cursor = breakEnd + WORK_BLOCK_MINUTES
+  const fixedIntervals = ctx.all
+    .flatMap((candidate) => {
+      if (candidate.kind !== 'activity' || candidate.anchor.type !== 'fixed') return []
+      const fixedStart = parseHHMM(candidate.anchor.time)
+      if (fixedStart === null) return []
+      return [{ start: fixedStart, end: fixedStart + candidate.duration }]
+    })
+    .filter((fixed) => fixed.start < end && fixed.end > start)
+    .sort((a, b) => a.start - b.start)
+  const segments: { start: number; end: number }[] = []
+  let cursor = start
+  for (const fixed of fixedIntervals) {
+    if (fixed.start > cursor) segments.push({ start: cursor, end: Math.min(end, fixed.start) })
+    cursor = Math.max(cursor, fixed.end)
+    if (cursor >= end) break
   }
-  const breakMinutes = breaks.reduce((sum, item) => sum + item.end - item.start, 0)
-  ctx.blocks.push({
-    ...todoWorkBlock(todo, Math.max(5, end - start - breakMinutes), start, end),
-    id: `todo:${todo.id}:snapped`,
-    workMinutes: Math.max(0, end - start - breakMinutes),
-    breakMinutes,
-    breaks,
-  })
+  if (cursor < end) segments.push({ start: cursor, end })
+
+  const rhythm = todoRhythm(todo)
+  const minTail = ctx.dayPlan.minBreakTailMinutes ?? DEFAULT_MIN_BREAK_TAIL_MINUTES
+  for (const segment of segments) {
+    const breaks: TimelineBreak[] = []
+    let breakStart = segment.start + rhythm.work
+    while (breakStart + rhythm.break <= segment.end) {
+      const remainingAfterBreak = segment.end - (breakStart + rhythm.break)
+      if (remainingAfterBreak < minTail) break
+      const key = `break:${ctx.breakIndex++}`
+      breaks.push({ breakKey: key, start: breakStart, end: breakStart + rhythm.break })
+      breakStart += rhythm.break + rhythm.work
+    }
+    const breakMinutes = breaks.reduce((sum, current) => sum + current.end - current.start, 0)
+    ctx.blocks.push({
+      ...todoWorkBlock(todo, Math.max(5, end - start), segment.start, segment.end),
+      id: `todo:${todo.id}:snapped:${segment.start}`,
+      workMinutes: Math.max(0, segment.end - segment.start - breakMinutes),
+      breakMinutes,
+      breaks,
+    })
+  }
   const placement = { id: item.id, kind: item.kind, start, end }
   ctx.placed.set(item.id, placement)
   return placement
@@ -310,9 +379,13 @@ function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor
   }
   const todo = item.todo!
   const target = todoTargetMinutes(todo, ctx.sessions)
+  const rhythm = todoRhythm(todo)
+  const minTail = ctx.dayPlan.minBreakTailMinutes ?? DEFAULT_MIN_BREAK_TAIL_MINUTES
   let remaining = target
   let cursor = initialCursor
   let workStreak = 0
+  let firstWork = true
+  let initialBreak: TimelineBreak | undefined
 
   while (remaining > 0 && cursor < DAY_END_MINUTES) {
     const placements = occupied(ctx)
@@ -325,11 +398,13 @@ function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor
     const barrier = placements.find((block) => block.start >= cursor)
     const gapEnd = barrier?.start ?? DAY_END_MINUTES
     const gapMinutes = gapEnd - cursor
-    const firstWorkCapacity = Math.max(0, WORK_BLOCK_MINUTES - workStreak)
+    const firstWorkCapacity = Math.max(0, rhythm.work - workStreak)
     const remainingTotalSpan =
       remaining <= firstWorkCapacity
         ? remaining
-        : firstWorkCapacity + DEFAULT_BREAK_MINUTES + todoTotalSpan(remaining - firstWorkCapacity)
+        : firstWorkCapacity +
+          (remaining - firstWorkCapacity >= minTail ? rhythm.break : 0) +
+          todoTotalSpan(remaining - firstWorkCapacity, todo.breakStyle, minTail)
     if (
       barrier &&
       gapMinutes < MIN_FLOW_GAP_MINUTES &&
@@ -340,8 +415,27 @@ function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor
       continue
     }
 
-    if (workStreak >= WORK_BLOCK_MINUTES) {
-      const { key, duration } = nextBreak(ctx)
+    if (firstWork && hasPreviousTodo(ctx, todo.id, cursor)) {
+      if (cursor + DEFAULT_BREAK_MINUTES >= gapEnd) {
+        if (!barrier) break
+        cursor = barrier.end
+        if (barrier.kind === 'activity') workStreak = 0
+        continue
+      }
+      const key = `break:${ctx.breakIndex++}`
+      initialBreak = { breakKey: key, start: cursor, end: cursor + DEFAULT_BREAK_MINUTES }
+      cursor += DEFAULT_BREAK_MINUTES
+      workStreak = 0
+    }
+
+    if (workStreak >= rhythm.work) {
+      if (remaining < minTail) {
+        workStreak = 0
+        continue
+      }
+      const { key, duration: overrideDuration } = nextBreak(ctx)
+      const duration =
+        ctx.dayPlan.breakOverrides?.[key] === undefined ? rhythm.break : overrideDuration
       if (duration > 0 && cursor + duration < gapEnd) {
         ctx.blocks.push({ kind: 'break', id: key, breakKey: key, start: cursor, end: cursor + duration })
         cursor += duration
@@ -350,14 +444,22 @@ function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor
       continue
     }
 
-    const chunk = Math.min(remaining, WORK_BLOCK_MINUTES - workStreak, gapEnd - cursor)
+    const chunk = Math.min(remaining, rhythm.work - workStreak, gapEnd - cursor)
     if (chunk <= 0) {
       if (!barrier) break
       cursor = barrier.end
       if (barrier.kind === 'activity') workStreak = 0
       continue
     }
-    ctx.blocks.push(todoWorkBlock(todo, target, cursor, cursor + chunk))
+    const block = todoWorkBlock(todo, target, cursor, cursor + chunk)
+    if (firstWork && initialBreak) {
+      block.start = initialBreak.start
+      block.breakMinutes = initialBreak.end - initialBreak.start
+      block.breaks = [initialBreak]
+    }
+    ctx.blocks.push(block)
+    firstWork = false
+    initialBreak = undefined
     cursor += chunk
     remaining -= chunk
     workStreak += chunk
@@ -430,6 +532,7 @@ function coalesceTimeline(blocks: TimelineBlock[]): TimelineBlock[] {
       }
       if (next.kind === 'todo' && next.todoId === first.todoId && next.start === end) {
         works.push(next)
+        breaks.push(...next.breaks)
         end = next.end
         index++
         continue

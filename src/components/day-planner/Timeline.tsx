@@ -280,16 +280,43 @@ export function Timeline({
       const parts = blocks
         .filter((block): block is TodoBlock => block.kind === 'todo' && block.todoId === item.id)
         .sort((a, b) => a.start - b.start)
-      const firstStart = parts[0]?.start
-      if (firstStart !== undefined && completionMinute > firstStart) {
+      const plannedFirstStart = parts[0]?.start
+      const plannedLastEnd = parts.at(-1)?.end
+      if (
+        plannedFirstStart !== undefined &&
+        plannedLastEnd !== undefined &&
+        completionMinute > plannedFirstStart
+      ) {
+        const activityById = new Map([
+          ...presets.map((preset) => [preset.id, preset] as const),
+          ...dayPlan.customActivities.map((activity) => [activity.id, activity] as const),
+        ])
+        const nextFixed = blocks
+          .filter((block): block is Extract<TimelineBlock, { kind: 'activity' }> => {
+            if (block.kind !== 'activity' || block.start < plannedFirstStart) return false
+            const activity = activityById.get(block.activityId)
+            const anchor = dayPlan.activityOverrides?.[block.activityId]?.anchor ?? activity?.anchor
+            return anchor?.type === 'fixed' || dayPlan.activityOverrides?.[block.activityId]?.time !== undefined
+          })
+          .sort((a, b) => a.start - b.start)[0]
+        let snappedEndMinute = completionMinute
+        if (nextFixed) {
+          if (completionMinute <= nextFixed.start) {
+            snappedEndMinute = completionMinute
+          } else if (completionMinute <= nextFixed.end) {
+            snappedEndMinute = nextFixed.start
+          } else if (plannedLastEnd <= nextFixed.start || plannedLastEnd <= nextFixed.end) {
+            snappedEndMinute = nextFixed.start
+          }
+        }
         onCommitDayPlan((prev) => ({
           ...prev,
           todoQueue: prev.todoQueue.map((todo) =>
             todo.id === item.id
               ? {
                   ...todo,
-                  snappedStartMinute: firstStart,
-                  snappedEndMinute: completionMinute,
+                  snappedStartMinute: plannedFirstStart,
+                  snappedEndMinute: snappedEndMinute,
                 }
               : todo
           ),
@@ -833,7 +860,7 @@ function PlanBlock({
   const resizeBase =
     block.kind === 'todo'
       ? todoItem?.snappedEndMinute !== undefined
-        ? block.end - block.start
+        ? todoItem.snappedEndMinute - (todoItem.snappedStartMinute ?? block.start)
         : todoItem
           ? todoTargetMinutes(todoItem, sessions)
           : block.targetMinutes

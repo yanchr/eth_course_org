@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react'
-import type { BlockAnchor, PlannedTodoItem, Subject } from '../../types'
+import { DAYS, type BlockAnchor, type Day, type PlannedTodoItem, type Subject } from '../../types'
 import { categoriesInWeek, isTracked } from '../../lib/subjects'
 import { combinedTodoStats, sdMultiplierLabel, todoLabel, todoTargetMinutes } from '../../lib/dayPlannerMath'
 import { createId } from '../../lib/id'
@@ -15,6 +15,7 @@ interface TodoPickerProps {
   subjects: Subject[]
   weekCount: number
   defaultWeek: number
+  date: string
   sessions: StudySession[]
   todoQueue: PlannedTodoItem[]
   activityTargets: AnchorTarget[]
@@ -25,6 +26,7 @@ export function TodoPicker({
   subjects,
   weekCount,
   defaultWeek,
+  date,
   sessions,
   todoQueue,
   activityTargets,
@@ -35,13 +37,22 @@ export function TodoPicker({
   const [week, setWeek] = useState(defaultWeek)
   const [picked, setPicked] = useState<string[]>([])
   const [sdMultiplier, setSdMultiplier] = useState(1)
+  const [breakStyle, setBreakStyle] = useState<'standard' | 'lecture'>('standard')
   const [anchor, setAnchor] = useState<BlockAnchor>({ type: 'flow' })
 
   const subject = tracked.find((s) => s.id === subjectId) ?? tracked[0] ?? null
   const cats = subject ? categoriesInWeek(subject, week) : []
 
   const toggleCat = (c: string) => {
-    setPicked((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+    setPicked((prev) => {
+      const hadLecture = prev.some((category) => category.toLowerCase().startsWith('lecture'))
+      const next = prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
+      if (!hadLecture && next.some((category) => category.toLowerCase().startsWith('lecture'))) {
+        setSdMultiplier(0)
+        setBreakStyle('lecture')
+      }
+      return next
+    })
   }
 
   const add = () => {
@@ -52,11 +63,13 @@ export function TodoPicker({
       week,
       categories: [...picked],
       sdMultiplier: Number.isFinite(sdMultiplier) ? sdMultiplier : 1,
+      breakStyle,
       anchor,
     }
     onChange([...todoQueue, item])
     setPicked([])
     setSdMultiplier(1)
+    setBreakStyle('standard')
     setAnchor({ type: 'flow' })
   }
 
@@ -77,6 +90,12 @@ export function TodoPicker({
   }))
   const allTargets = [...activityTargets, ...todoTargets]
   const totalTodos = todoQueue.reduce((sum, item) => sum + item.categories.length, 0)
+  const selectedDay = DAYS[(new Date(`${date}T12:00:00`).getDay() + 6) % 7] as Day
+  const lectureSlots = (subject?.scheduleSlots ?? []).filter((slot) =>
+    slot.type.toLowerCase().startsWith('lecture'),
+  )
+  const matchingLectureSlots = lectureSlots.filter((slot) => slot.day === selectedDay)
+  const pinSlots = matchingLectureSlots.length > 0 ? matchingLectureSlots : lectureSlots
 
   return (
     <section className="flex flex-col gap-3">
@@ -167,6 +186,28 @@ export function TodoPicker({
         </label>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        <Pill active={breakStyle === 'standard'} onClick={() => setBreakStyle('standard')}>
+          Rhythm: Standard (50/10)
+        </Pill>
+        <Pill active={breakStyle === 'lecture'} onClick={() => setBreakStyle('lecture')}>
+          Lecture (45/15)
+        </Pill>
+        {pinSlots.map((slot) => {
+          const time = slot.time.split('-')[0]?.trim()
+          if (!time) return null
+          return (
+            <Pill
+              key={slot.id}
+              active={anchor.type === 'fixed' && anchor.time === time}
+              onClick={() => setAnchor({ type: 'fixed', time })}
+            >
+              Pin to {slot.day} {time}
+            </Pill>
+          )
+        })}
+      </div>
+
       <Button
         variant="primary"
         icon={<Plus className="size-4" />}
@@ -212,6 +253,7 @@ export function TodoPicker({
                     W{item.week} · {minutes}m
                     {item.customDurationMinutes != null ? ' · custom' : ''}
                     {' · '}{sdMultiplierLabel(item.sdMultiplier)}
+                    {' · '}{item.breakStyle === 'lecture' ? '45/15' : '50/10'}
                   </p>
                   <div className="mt-2 grid grid-cols-[6rem_1fr] gap-1.5">
                     <input
@@ -234,6 +276,19 @@ export function TodoPicker({
                         onChange(todoQueue.map((todo) => todo.id === item.id ? { ...todo, anchor: nextAnchor } : todo))
                       }
                     />
+                    <button
+                      type="button"
+                      className="inline-flex h-11 items-center rounded-lg px-2 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                      onClick={() =>
+                        onChange(todoQueue.map((todo) =>
+                          todo.id === item.id
+                            ? { ...todo, breakStyle: todo.breakStyle === 'lecture' ? 'standard' : 'lecture' }
+                            : todo
+                        ))
+                      }
+                    >
+                      Rhythm: {item.breakStyle === 'lecture' ? 'Lecture 45/15' : 'Standard 50/10'}
+                    </button>
                     {item.customDurationMinutes != null && (
                       <button
                         type="button"
@@ -248,6 +303,7 @@ export function TodoPicker({
                                 week: todo.week,
                                 categories: todo.categories,
                                 sdMultiplier: todo.sdMultiplier,
+                                breakStyle: todo.breakStyle,
                                 anchor: todo.anchor,
                               }
                             }),
