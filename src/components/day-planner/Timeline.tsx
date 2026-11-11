@@ -157,7 +157,7 @@ function todoSubtitle(block: TodoBlock): string {
 }
 
 /** Todos in the queue that the day can finish. A truncated block does not finish today. */
-function todosExpectedToday(queue: { id: string }[], blocks: TimelineBlock[]): string {
+function todosExpectedToday(queue: { id: string; categories: string[] }[], blocks: TimelineBlock[]): string {
   const placed = new Set<string>()
   const unfinished = new Set<string>()
   for (const block of blocks) {
@@ -165,8 +165,10 @@ function todosExpectedToday(queue: { id: string }[], blocks: TimelineBlock[]): s
     placed.add(block.todoId)
     if (block.truncated) unfinished.add(block.todoId)
   }
-  const queued = queue.length
-  const expected = queue.filter((todo) => placed.has(todo.id) && !unfinished.has(todo.id)).length
+  const queued = queue.reduce((sum, todo) => sum + todo.categories.length, 0)
+  const expected = queue
+    .filter((todo) => placed.has(todo.id) && !unfinished.has(todo.id))
+    .reduce((sum, todo) => sum + todo.categories.length, 0)
   if (queued === 0 || expected === queued) {
     return `${expected} ${expected === 1 ? 'todo' : 'todos'}`
   }
@@ -258,6 +260,40 @@ export function Timeline({
   )
   const laidOut = useMemo(() => layoutBlocks(blocks), [blocks])
   const endsAt = blocks.reduce((max, block) => Math.max(max, block.end), doneAt)
+
+  const toggleTodoComplete = (item: PlannedTodoItem, completed: boolean) => {
+    if (completed && isToday) {
+      const parts = blocks
+        .filter((block): block is TodoBlock => block.kind === 'todo' && block.todoId === item.id)
+        .sort((a, b) => a.start - b.start)
+      const firstStart = parts[0]?.start
+      if (firstStart !== undefined && nowMin > firstStart) {
+        let workMinutes = 0
+        for (const part of parts) {
+          if (part.end <= nowMin) {
+            workMinutes += part.workMinutes
+            continue
+          }
+          if (part.start >= nowMin) break
+          const elapsed = nowMin - part.start
+          const elapsedBreaks = part.breaks.reduce((sum, item) => {
+            const overlap = Math.max(0, Math.min(nowMin, item.end) - item.start)
+            return sum + overlap
+          }, 0)
+          workMinutes += Math.max(0, elapsed - elapsedBreaks)
+          break
+        }
+        const snapped = Math.max(5, Math.round(workMinutes))
+        onCommitDayPlan((prev) => ({
+          ...prev,
+          todoQueue: prev.todoQueue.map((todo) =>
+            todo.id === item.id ? { ...todo, customDurationMinutes: snapped } : todo
+          ),
+        }))
+      }
+    }
+    onToggleTodoComplete(item, completed)
+  }
 
   const commitDrag = () => {
     const current = dragRef.current
@@ -509,7 +545,7 @@ export function Timeline({
                   drag={drag}
                   onPointerMove={onPointerMove}
                   onPointerUp={commitDrag}
-                  onToggleComplete={onToggleTodoComplete}
+                  onToggleComplete={toggleTodoComplete}
                   onStartStudy={onStartStudy}
                   onStartReorder={(todoId, event) => {
                     if (!isEditing) return

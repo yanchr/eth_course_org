@@ -78,17 +78,22 @@ export interface ActiveStudy {
 
 export type ActivityColor = 'amber' | 'sky' | 'violet' | 'rose' | 'zinc'
 
-export type ActivityAnchor =
+export type BlockAnchor =
+  | { type: 'flow' }
   | { type: 'fixed'; time: string }
   | { type: 'start'; priority: number }
   | { type: 'end'; priority: number }
-  | { type: 'after'; activityId: string }
+  | { type: 'after'; targetId: string }
+  | { type: 'before'; targetId: string }
+
+/** @deprecated Use BlockAnchor. */
+export type ActivityAnchor = BlockAnchor
 
 export interface ActivityPreset {
   id: string
   name: string
   durationMinutes: number
-  anchor: ActivityAnchor
+  anchor: BlockAnchor
   isDefault: boolean
   color?: ActivityColor
 }
@@ -101,14 +106,18 @@ export interface PlannedTodoItem {
   categories: string[]
   /** Set when the user resizes the block to override the statistical estimate. */
   customDurationMinutes?: number
-  /** When true, target duration includes +1 SD. Defaults to true. */
-  includeSdBuffer: boolean
+  /** Statistical buffer applied to the historical standard deviation. Defaults to 1. */
+  sdMultiplier: number
+  /** Defaults to flow for saved plans created before todo anchors were introduced. */
+  anchor: BlockAnchor
 }
 
 export interface ActivityOverride {
   durationMinutes?: number
   /** HH:MM override for fixed-anchor activities. */
   time?: string
+  /** Day-scoped anchor override for a reusable activity preset. */
+  anchor?: BlockAnchor
 }
 
 export interface DayPlanState {

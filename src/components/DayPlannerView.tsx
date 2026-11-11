@@ -63,7 +63,8 @@ export function DayPlannerView() {
         subjectId: todo.subjectId,
         week: todo.week,
         categories: todo.categories,
-        includeSdBuffer: todo.includeSdBuffer,
+        sdMultiplier: todo.sdMultiplier,
+        anchor: todo.anchor,
       })),
     }))
   }
@@ -130,6 +131,12 @@ export function DayPlannerView() {
               defaultWeek={defaultWeek}
               sessions={studySessions}
               todoQueue={dayPlan.todoQueue}
+              activityTargets={[
+                ...activityPresets
+                  .filter((preset) => dayPlan.selectedPresetIds.includes(preset.id))
+                  .map((preset) => ({ id: preset.id, label: preset.name })),
+                ...dayPlan.customActivities.map((activity) => ({ id: activity.id, label: activity.name })),
+              ]}
               onChange={(todoQueue) => updateDayPlan({ todoQueue })}
             />
           </div>

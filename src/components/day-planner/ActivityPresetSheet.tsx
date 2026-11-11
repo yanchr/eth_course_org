@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react'
-import type { ActivityAnchor, ActivityColor, ActivityPreset } from '../../types'
+import type { ActivityColor, ActivityPreset } from '../../types'
 import { createId } from '../../lib/id'
 import { Sheet } from '../ui/Sheet'
 import { Button } from '../ui/Button'
-import { Field, inputClass } from '../ui/Field'
+import { Field } from '../ui/Field'
 import { Pill } from '../ui/Pill'
+import { BlockAnchorEditor, type AnchorTarget } from './BlockAnchorEditor'
 
 const COLORS: ActivityColor[] = ['amber', 'sky', 'violet', 'rose', 'zinc']
-const ANCHOR_TYPES: ActivityAnchor['type'][] = ['fixed', 'start', 'end', 'after']
-
 interface ActivityPresetSheetProps {
   open: boolean
   onClose: () => void
   initial?: ActivityPreset | null
-  activityIds: string[]
+  anchorTargets: AnchorTarget[]
   onSave: (preset: ActivityPreset) => void
 }
 
@@ -33,7 +32,7 @@ export function ActivityPresetSheet({
   open,
   onClose,
   initial,
-  activityIds,
+  anchorTargets,
   onSave,
 }: ActivityPresetSheetProps) {
   const [draft, setDraft] = useState(() => emptyDraft(initial))
@@ -42,21 +41,10 @@ export function ActivityPresetSheet({
     if (open) setDraft(emptyDraft(initial))
   }, [open, initial])
 
-  const setAnchorType = (type: ActivityAnchor['type']) => {
-    setDraft((prev) => {
-      if (type === 'fixed') return { ...prev, anchor: { type: 'fixed', time: '12:00' } }
-      if (type === 'after') {
-        const activityId = activityIds.find((id) => id !== prev.id) ?? ''
-        return { ...prev, anchor: { type: 'after', activityId } }
-      }
-      return { ...prev, anchor: { type, priority: 0 } }
-    })
-  }
-
   const canSave =
     draft.name.trim() !== '' &&
     draft.durationMinutes > 0 &&
-    (draft.anchor.type !== 'after' || draft.anchor.activityId !== '')
+    ((draft.anchor.type !== 'after' && draft.anchor.type !== 'before') || draft.anchor.targetId !== '')
 
   return (
     <Sheet
@@ -103,60 +91,12 @@ export function ActivityPresetSheet({
 
         <div className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-zinc-500">Anchor</span>
-          <div className="flex flex-wrap gap-2">
-            {ANCHOR_TYPES.map((type) => (
-              <Pill key={type} active={draft.anchor.type === type} onClick={() => setAnchorType(type)}>
-                {type}
-              </Pill>
-            ))}
-          </div>
+          <BlockAnchorEditor
+            value={draft.anchor}
+            targets={anchorTargets.filter((target) => target.id !== draft.id)}
+            onChange={(anchor) => setDraft((prev) => ({ ...prev, anchor }))}
+          />
         </div>
-
-        {draft.anchor.type === 'fixed' && (
-          <Field
-            label="Start time"
-            type="time"
-            value={draft.anchor.time}
-            onChange={(e) => setDraft((p) => ({ ...p, anchor: { type: 'fixed', time: e.target.value } }))}
-          />
-        )}
-        {(draft.anchor.type === 'start' || draft.anchor.type === 'end') && (
-          <Field
-            label="Priority"
-            type="number"
-            value={draft.anchor.priority}
-            onChange={(e) =>
-              setDraft((p) => ({
-                ...p,
-                anchor: { type: draft.anchor.type as 'start' | 'end', priority: Number(e.target.value) || 0 },
-              }))
-            }
-          />
-        )}
-        {draft.anchor.type === 'after' && (
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-500" htmlFor="after-activity">
-              After activity
-            </label>
-            <select
-              id="after-activity"
-              className={inputClass}
-              value={draft.anchor.activityId}
-              onChange={(e) =>
-                setDraft((p) => ({ ...p, anchor: { type: 'after', activityId: e.target.value } }))
-              }
-            >
-              <option value="">Select…</option>
-              {activityIds
-                .filter((id) => id !== draft.id)
-                .map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-            </select>
-          </div>
-        )}
 
         <div className="flex flex-col gap-1.5">
           <span className="text-xs font-medium text-zinc-500">Color</span>

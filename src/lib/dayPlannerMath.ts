@@ -86,14 +86,18 @@ export function combinedTodoStats(
   return { mean: global.mean * C, sd: global.sd * C, n: 0 }
 }
 
-/** Target work minutes: custom override, or round(μ + (includeSdBuffer ? σ : 0)). */
+/** Target work minutes: custom override, or round(μ + multiplier × σ). */
 export function todoTargetMinutes(item: PlannedTodoItem, sessions: StudySession[]): number {
   if (item.customDurationMinutes != null && item.customDurationMinutes > 0) {
     return Math.round(item.customDurationMinutes)
   }
   const { mean, sd } = combinedTodoStats(sessions, item.subjectId, item.categories)
-  const target = mean + (item.includeSdBuffer ? sd : 0)
-  return Math.max(1, Math.round(target))
+  return Math.max(5, Math.round(mean + item.sdMultiplier * sd))
+}
+
+export function sdMultiplierLabel(multiplier: number): string {
+  if (multiplier === 0) return 'Avg'
+  return `Avg + ${multiplier} SD`
 }
 
 export function todoLabel(categories: string[]): string {

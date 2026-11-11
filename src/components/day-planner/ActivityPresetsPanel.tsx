@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { Download, Pencil, Plus, Trash2 } from 'lucide-react'
-import type { ActivityPreset, DayPlanState, Subject } from '../../types'
+import type { ActivityPreset, BlockAnchor, DayPlanState, Subject } from '../../types'
 import { importClassActivities } from '../../lib/dayPlannerImport'
 import { Button } from '../ui/Button'
 import { IconButton } from '../ui/IconButton'
 import { inputClass } from '../ui/Field'
 import { ActivityPresetSheet } from './ActivityPresetSheet'
 import { createId } from '../../lib/id'
+import { todoLabel } from '../../lib/dayPlannerMath'
+import { BlockAnchorEditor, type AnchorTarget } from './BlockAnchorEditor'
 
 interface ActivityPresetsPanelProps {
   presets: ActivityPreset[]
@@ -36,11 +38,18 @@ export function ActivityPresetsPanel({
   const [oneOffName, setOneOffName] = useState('')
   const [oneOffDuration, setOneOffDuration] = useState(30)
   const [oneOffTime, setOneOffTime] = useState('14:00')
+  const [oneOffAnchor, setOneOffAnchor] = useState<BlockAnchor>({ type: 'fixed', time: '14:00' })
 
   const selected = new Set(dayPlan.selectedPresetIds)
-  const allIds = [
-    ...presets.map((p) => p.id),
-    ...dayPlan.customActivities.map((a) => a.id),
+  const anchorTargets: AnchorTarget[] = [
+    ...presets
+      .filter((preset) => selected.has(preset.id))
+      .map((preset) => ({ id: preset.id, label: preset.name })),
+    ...dayPlan.customActivities.map((activity) => ({ id: activity.id, label: activity.name })),
+    ...dayPlan.todoQueue.map((todo) => ({
+      id: todo.id,
+      label: `${subjects.find((subject) => subject.id === todo.subjectId)?.name ?? 'Subject'} · ${todoLabel(todo.categories)}`,
+    })),
   ]
 
   const importClasses = () => {
@@ -60,7 +69,9 @@ export function ActivityPresetsPanel({
       id: createId(),
       name,
       durationMinutes: Math.max(5, oneOffDuration),
-      anchor: { type: 'fixed', time: oneOffTime || '14:00' },
+      anchor: oneOffAnchor.type === 'fixed'
+        ? { type: 'fixed', time: oneOffTime || oneOffAnchor.time }
+        : oneOffAnchor,
       isDefault: false,
       color: 'rose',
     }
@@ -69,6 +80,7 @@ export function ActivityPresetsPanel({
       customActivities: [...prev.customActivities, activity],
     }))
     setOneOffName('')
+    setOneOffAnchor({ type: 'fixed', time: oneOffTime || '14:00' })
   }
 
   return (
@@ -90,7 +102,7 @@ export function ActivityPresetsPanel({
 
       <ul className="flex flex-col gap-1">
         {presets.map((preset) => (
-          <li key={preset.id} className="flex min-h-11 items-center gap-2 rounded-xl px-1">
+          <li key={preset.id} className="flex flex-wrap min-h-11 items-center gap-2 rounded-xl px-1">
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-sm text-zinc-800">
               <input
                 type="checkbox"
@@ -119,6 +131,22 @@ export function ActivityPresetsPanel({
             <IconButton label="Delete preset" className="size-9" onClick={() => onDeletePreset(preset.id)}>
               <Trash2 className="size-3.5" />
             </IconButton>
+            {selected.has(preset.id) && (
+              <div className="w-full pl-7 pb-2">
+                <BlockAnchorEditor
+                  compact
+                  value={dayPlan.activityOverrides?.[preset.id]?.anchor ?? preset.anchor}
+                  targets={anchorTargets.filter((target) => target.id !== preset.id)}
+                  onChange={(anchor) => onUpdateDayPlan((prev) => ({
+                    ...prev,
+                    activityOverrides: {
+                      ...prev.activityOverrides,
+                      [preset.id]: { ...prev.activityOverrides?.[preset.id], anchor },
+                    },
+                  }))}
+                />
+              </div>
+            )}
           </li>
         ))}
       </ul>
@@ -127,7 +155,7 @@ export function ActivityPresetsPanel({
         <div className="flex flex-col gap-1 border-t border-zinc-100 pt-3">
           <p className="text-xs font-medium text-zinc-500">Today only</p>
           {dayPlan.customActivities.map((activity) => (
-            <div key={activity.id} className="flex min-h-11 items-center gap-2 rounded-xl px-1">
+            <div key={activity.id} className="flex flex-wrap min-h-11 items-center gap-2 rounded-xl px-1">
               <span className="min-w-0 flex-1 truncate text-sm text-zinc-800">
                 <span className="font-medium">{activity.name}</span>
                 <span className="text-zinc-400">
@@ -148,6 +176,19 @@ export function ActivityPresetsPanel({
               >
                 <Trash2 className="size-3.5" />
               </IconButton>
+              <div className="w-full pl-1 pb-2">
+                <BlockAnchorEditor
+                  compact
+                  value={activity.anchor}
+                  targets={anchorTargets.filter((target) => target.id !== activity.id)}
+                  onChange={(anchor) => onUpdateDayPlan((prev) => ({
+                    ...prev,
+                    customActivities: prev.customActivities.map((item) =>
+                      item.id === activity.id ? { ...item, anchor } : item
+                    ),
+                  }))}
+                />
+              </div>
             </div>
           ))}
         </div>
@@ -182,6 +223,14 @@ export function ActivityPresetsPanel({
         <Button size="sm" disabled={!oneOffName.trim()} onClick={addOneOff}>
           Add one-off
         </Button>
+        <BlockAnchorEditor
+          value={oneOffAnchor}
+          targets={anchorTargets}
+          onChange={(anchor) => {
+            setOneOffAnchor(anchor)
+            if (anchor.type === 'fixed') setOneOffTime(anchor.time)
+          }}
+        />
       </div>
 
       <Button
@@ -196,7 +245,7 @@ export function ActivityPresetsPanel({
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
         initial={editing}
-        activityIds={allIds}
+        anchorTargets={anchorTargets}
         onSave={onUpsertPreset}
       />
     </section>

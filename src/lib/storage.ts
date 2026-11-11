@@ -3,7 +3,7 @@ import {
   DEFAULT_CATEGORIES,
   WEEK_COUNT,
   type ActiveStudy,
-  type ActivityAnchor,
+  type BlockAnchor,
   type ActivityColor,
   type ActivityOverride,
   type ActivityPreset,
@@ -48,7 +48,7 @@ export function createDefaultActivityPresets(): ActivityPreset[] {
       id: 'Sleeping',
       name: 'Sleeping',
       durationMinutes: 20,
-      anchor: { type: 'after', activityId: 'Lunch' },
+      anchor: { type: 'after', targetId: 'Lunch' },
       isDefault: true,
       color: 'violet',
     },
@@ -214,9 +214,10 @@ function parseActiveStudy(raw: unknown): ActiveStudy | null {
   }
 }
 
-function parseAnchor(raw: unknown): ActivityAnchor | null {
+function parseAnchor(raw: unknown): BlockAnchor | null {
   if (!isObject(raw)) return null
   const type = str(raw.type)
+  if (type === 'flow') return { type: 'flow' }
   if (type === 'fixed') {
     const time = str(raw.time)
     return HHMM.test(time) ? { type: 'fixed', time } : null
@@ -225,9 +226,10 @@ function parseAnchor(raw: unknown): ActivityAnchor | null {
     const priority = typeof raw.priority === 'number' && Number.isFinite(raw.priority) ? raw.priority : 0
     return { type, priority }
   }
-  if (type === 'after') {
-    const activityId = str(raw.activityId)
-    return activityId ? { type: 'after', activityId } : null
+  if (type === 'after' || type === 'before') {
+    // `activityId` was the pre-BlockAnchor key used by saved activity presets.
+    const targetId = str(raw.targetId) || str(raw.activityId)
+    return targetId ? { type, targetId } : null
   }
   return null
 }
@@ -269,7 +271,13 @@ function parsePlannedTodo(raw: unknown): PlannedTodoItem | null {
     subjectId,
     week: raw.week,
     categories,
-    includeSdBuffer: raw.includeSdBuffer !== false,
+    sdMultiplier:
+      typeof raw.sdMultiplier === 'number' && Number.isFinite(raw.sdMultiplier)
+        ? Math.max(0, raw.sdMultiplier)
+        : raw.includeSdBuffer === false
+          ? 0
+          : 1,
+    anchor: parseAnchor(raw.anchor) ?? { type: 'flow' },
     ...(custom !== undefined ? { customDurationMinutes: custom } : {}),
   }
 }
@@ -298,7 +306,11 @@ function parseActivityOverrides(raw: unknown): Record<string, ActivityOverride> 
     }
     const time = str(value.time)
     if (HHMM.test(time)) override.time = time
-    if (override.durationMinutes !== undefined || override.time !== undefined) out[key] = override
+    const anchor = parseAnchor(value.anchor)
+    if (anchor) override.anchor = anchor
+    if (override.durationMinutes !== undefined || override.time !== undefined || override.anchor !== undefined) {
+      out[key] = override
+    }
   }
   return Object.keys(out).length ? out : undefined
 }

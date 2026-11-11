@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react'
-import type { PlannedTodoItem, Subject } from '../../types'
+import type { BlockAnchor, PlannedTodoItem, Subject } from '../../types'
 import { categoriesInWeek, isTracked } from '../../lib/subjects'
-import { combinedTodoStats, todoLabel, todoTargetMinutes } from '../../lib/dayPlannerMath'
+import { combinedTodoStats, sdMultiplierLabel, todoLabel, todoTargetMinutes } from '../../lib/dayPlannerMath'
 import { createId } from '../../lib/id'
 import { Button } from '../ui/Button'
 import { Pill } from '../ui/Pill'
 import { IconButton } from '../ui/IconButton'
 import { inputClass } from '../ui/Field'
 import type { StudySession } from '../../types'
+import { BlockAnchorEditor, type AnchorTarget } from './BlockAnchorEditor'
 
 interface TodoPickerProps {
   subjects: Subject[]
@@ -16,6 +17,7 @@ interface TodoPickerProps {
   defaultWeek: number
   sessions: StudySession[]
   todoQueue: PlannedTodoItem[]
+  activityTargets: AnchorTarget[]
   onChange: (queue: PlannedTodoItem[]) => void
 }
 
@@ -25,12 +27,15 @@ export function TodoPicker({
   defaultWeek,
   sessions,
   todoQueue,
+  activityTargets,
   onChange,
 }: TodoPickerProps) {
   const tracked = useMemo(() => subjects.filter(isTracked), [subjects])
   const [subjectId, setSubjectId] = useState(tracked[0]?.id ?? '')
   const [week, setWeek] = useState(defaultWeek)
   const [picked, setPicked] = useState<string[]>([])
+  const [sdMultiplier, setSdMultiplier] = useState(1)
+  const [anchor, setAnchor] = useState<BlockAnchor>({ type: 'flow' })
 
   const subject = tracked.find((s) => s.id === subjectId) ?? tracked[0] ?? null
   const cats = subject ? categoriesInWeek(subject, week) : []
@@ -46,10 +51,13 @@ export function TodoPicker({
       subjectId: subject.id,
       week,
       categories: [...picked],
-      includeSdBuffer: true,
+      sdMultiplier,
+      anchor,
     }
     onChange([...todoQueue, item])
     setPicked([])
+    setSdMultiplier(1)
+    setAnchor({ type: 'flow' })
   }
 
   const move = (index: number, dir: -1 | 1) => {
@@ -63,10 +71,21 @@ export function TodoPicker({
   const estimate = subject && picked.length > 0
     ? combinedTodoStats(sessions, subject.id, picked)
     : null
+  const todoTargets: AnchorTarget[] = todoQueue.map((item) => ({
+    id: item.id,
+    label: `${subjects.find((subject) => subject.id === item.subjectId)?.name ?? 'Subject'} · ${todoLabel(item.categories)}`,
+  }))
+  const allTargets = [...activityTargets, ...todoTargets]
+  const totalTodos = todoQueue.reduce((sum, item) => sum + item.categories.length, 0)
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-semibold text-zinc-900">Course todos</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-zinc-900">Course todos</h2>
+        <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-600">
+          {totalTodos} {totalTodos === 1 ? 'todo' : 'todos'}
+        </span>
+      </div>
 
       <div className="grid grid-cols-2 gap-2">
         <div className="col-span-2 flex flex-col gap-1.5 sm:col-span-1">
@@ -130,6 +149,24 @@ export function TodoPicker({
         </p>
       )}
 
+      <div className="grid grid-cols-[7rem_1fr] gap-2">
+        <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+          SD multiplier
+          <input
+            className={inputClass}
+            type="number"
+            min={0}
+            step="0.1"
+            value={sdMultiplier}
+            onChange={(event) => setSdMultiplier(Math.max(0, Number(event.target.value) || 0))}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+          Anchor
+          <BlockAnchorEditor value={anchor} targets={allTargets} onChange={setAnchor} compact />
+        </label>
+      </div>
+
       <Button
         variant="primary"
         icon={<Plus className="size-4" />}
@@ -174,21 +211,29 @@ export function TodoPicker({
                   <p className="text-xs text-zinc-500">
                     W{item.week} · {minutes}m
                     {item.customDurationMinutes != null ? ' · custom' : ''}
+                    {' · '}{sdMultiplierLabel(item.sdMultiplier)}
                   </p>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      className="inline-flex h-11 items-center rounded-lg px-2 text-[11px] font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
-                      onClick={() =>
-                        onChange(
-                          todoQueue.map((todo) =>
-                            todo.id === item.id ? { ...todo, includeSdBuffer: !todo.includeSdBuffer } : todo,
-                          ),
-                        )
+                  <div className="mt-2 grid grid-cols-[6rem_1fr] gap-1.5">
+                    <input
+                      aria-label="SD multiplier"
+                      className={inputClass}
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      value={item.sdMultiplier}
+                      onChange={(event) => {
+                        const value = Math.max(0, Number(event.target.value) || 0)
+                        onChange(todoQueue.map((todo) => todo.id === item.id ? { ...todo, sdMultiplier: value } : todo))
+                      }}
+                    />
+                    <BlockAnchorEditor
+                      compact
+                      value={item.anchor}
+                      targets={allTargets.filter((target) => target.id !== item.id)}
+                      onChange={(nextAnchor) =>
+                        onChange(todoQueue.map((todo) => todo.id === item.id ? { ...todo, anchor: nextAnchor } : todo))
                       }
-                    >
-                      {item.includeSdBuffer ? 'Avg + SD' : 'Avg only'}
-                    </button>
+                    />
                     {item.customDurationMinutes != null && (
                       <button
                         type="button"
@@ -202,7 +247,8 @@ export function TodoPicker({
                                 subjectId: todo.subjectId,
                                 week: todo.week,
                                 categories: todo.categories,
-                                includeSdBuffer: todo.includeSdBuffer,
+                                sdMultiplier: todo.sdMultiplier,
+                                anchor: todo.anchor,
                               }
                             }),
                           )
