@@ -1,16 +1,96 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { currentWeek, toISODate } from '../lib/semester'
 import type { PlannedTodoItem } from '../types'
-import { Button } from './ui/Button'
 import { Field } from './ui/Field'
 import { Sheet } from './ui/Sheet'
 import { TodoPicker } from './day-planner/TodoPicker'
 import { ActivityPresetsPanel } from './day-planner/ActivityPresetsPanel'
 import { Timeline } from './day-planner/Timeline'
+import { cn } from '../lib/cn'
 
 /** One automatic reset per calendar day, so a date picked in Configure survives tab changes. */
 let dailyResetFor = ''
+const CLEAR_HOLD_MS = 1200
+
+function LongPressClearButton({ onConfirm }: { onConfirm: () => void }) {
+  const timerRef = useRef<number | null>(null)
+  const helperTimerRef = useRef<number | null>(null)
+  const [holding, setHolding] = useState(false)
+  const [showHelper, setShowHelper] = useState(false)
+
+  const stop = (showHint = true) => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    timerRef.current = null
+    if (holding && showHint) {
+      setShowHelper(true)
+      if (helperTimerRef.current !== null) window.clearTimeout(helperTimerRef.current)
+      helperTimerRef.current = window.setTimeout(() => setShowHelper(false), 1400)
+    }
+    setHolding(false)
+  }
+
+  const start = () => {
+    if (timerRef.current !== null) return
+    setShowHelper(false)
+    setHolding(true)
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null
+      setHolding(false)
+      onConfirm()
+    }, CLEAR_HOLD_MS)
+  }
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    if (helperTimerRef.current !== null) window.clearTimeout(helperTimerRef.current)
+  }, [])
+
+  const beginPointerHold = (event: PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    start()
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label="Hold for 1.2 seconds to clear day"
+      className={cn(
+        'relative isolate flex h-11 w-full touch-none items-center justify-center overflow-hidden rounded-xl',
+        'border border-red-200 bg-white px-4 text-sm font-medium text-red-600 select-none',
+        'transition-colors duration-150 ease-out hover:bg-red-50',
+        'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600',
+      )}
+      onClick={(event) => event.preventDefault()}
+      onPointerDown={beginPointerHold}
+      onPointerUp={() => stop()}
+      onPointerLeave={() => stop()}
+      onPointerCancel={() => stop()}
+      onKeyDown={(event) => {
+        if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+          event.preventDefault()
+          start()
+        }
+      }}
+      onKeyUp={(event) => {
+        if (event.key === ' ' || event.key === 'Enter') stop()
+      }}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          'absolute inset-y-0 left-0 -z-10 bg-red-500/25 dark:bg-red-500/35',
+          holding
+            ? 'w-full transition-[width] duration-[1200ms] ease-linear'
+            : 'w-0 transition-[width] duration-150 ease-out',
+        )}
+      />
+      {showHelper ? 'Hold to clear day' : 'Clear day / fresh day'}
+    </button>
+  )
+}
 
 export function DayPlannerView() {
   const {
@@ -159,9 +239,7 @@ export function DayPlannerView() {
         subtitle="Date, todos, and activities"
         width="lg"
         footer={
-          <Button variant="danger" className="w-full" onClick={clearDay}>
-            Clear day / fresh day
-          </Button>
+          <LongPressClearButton onConfirm={clearDay} />
         }
       >
         <div className="flex flex-col gap-6">

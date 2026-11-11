@@ -45,9 +45,25 @@ export function globalBaseline(sessions: StudySession[]): MeanSd {
   return sampleMeanSd([...map.values()])
 }
 
+function categoryStats(
+  map: Map<string, number>,
+  global: MeanSd,
+  subjectId: string,
+  category: string,
+): MeanSd {
+  const values: number[] = []
+  for (const [key, minutes] of map) {
+    const [sid, , loggedCategory] = key.split('\0')
+    if (sid === subjectId && loggedCategory === category && minutes > 0) values.push(minutes)
+  }
+  if (values.length >= 2) return sampleMeanSd(values)
+  if (values.length === 1) return { mean: values[0], sd: global.sd, n: 1 }
+  return { mean: global.mean, sd: global.sd, n: 0 }
+}
+
 /**
- * Combined weekly totals T_{C,w} = sum_{c in C} t_{c,w} for weeks with T > 0,
- * then 3-tier hierarchical μ/σ fallback.
+ * Means are additive per category, even when categories were logged in disjoint weeks.
+ * SD uses paired complete weeks when possible and per-category fallback otherwise.
  */
 export function combinedTodoStats(
   sessions: StudySession[],
@@ -58,32 +74,29 @@ export function combinedTodoStats(
   if (C === 0) return { mean: 0, sd: 0, n: 0 }
 
   const map = buildCategoryWeekMinutes(sessions)
-  const weeks = new Set<number>()
-  for (const key of map.keys()) {
-    const [sid, weekStr] = key.split('\0')
-    if (sid === subjectId) weeks.add(Number(weekStr))
-  }
-
-  const totals: number[] = []
-  for (const week of weeks) {
-    let total = 0
-    for (const category of categories) {
-      total += map.get(categoryWeekKey(subjectId, week, category)) ?? 0
-    }
-    if (total > 0) totals.push(total)
-  }
-
   const global = globalBaseline(sessions)
-  const n = totals.length
+  const individual = categories.map((category) => categoryStats(map, global, subjectId, category))
+  const mean = individual.reduce((sum, stats) => sum + stats.mean, 0)
 
-  if (n >= 2) {
-    const stats = sampleMeanSd(totals)
-    return stats
+  const subjectWeeks = new Set<number>()
+  for (const key of map.keys()) {
+    const [sid, week] = key.split('\0')
+    if (sid === subjectId) subjectWeeks.add(Number(week))
   }
-  if (n === 1) {
-    return { mean: totals[0], sd: global.sd * C, n: 1 }
+  const pairedTotals = [...subjectWeeks].flatMap((week) => {
+    const values = categories.map((category) => map.get(categoryWeekKey(subjectId, week, category)) ?? 0)
+    return values.every((minutes) => minutes > 0)
+      ? [values.reduce((sum, minutes) => sum + minutes, 0)]
+      : []
+  })
+  if (pairedTotals.length >= 2) {
+    return { mean, sd: sampleMeanSd(pairedTotals).sd, n: pairedTotals.length }
   }
-  return { mean: global.mean * C, sd: global.sd * C, n: 0 }
+
+  const sd = individual.every((stats) => stats.n === 1)
+    ? individual.reduce((sum, stats) => sum + stats.sd, 0)
+    : Math.sqrt(individual.reduce((sum, stats) => sum + stats.sd ** 2, 0))
+  return { mean, sd, n: Math.min(...individual.map((stats) => stats.n)) }
 }
 
 /** Target work minutes: custom override, or round(μ + multiplier × σ). */

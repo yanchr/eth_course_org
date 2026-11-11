@@ -198,7 +198,10 @@ function renderExactTodo(ctx: ScheduleContext, item: Schedulable, start: number)
 function renderSnappedTodo(ctx: ScheduleContext, item: Schedulable): Placement {
   const todo = item.todo!
   const start = Math.max(0, Math.min(todo.snappedStartMinute!, DAY_END_MINUTES))
-  const end = Math.max(start, Math.min(todo.snappedEndMinute!, DAY_END_MINUTES))
+  const end = Math.min(
+    DAY_END_MINUTES,
+    Math.max(start + 5, Math.min(todo.snappedEndMinute!, DAY_END_MINUTES)),
+  )
   const breaks: TimelineBreak[] = []
   let cursor = start + WORK_BLOCK_MINUTES
   while (cursor + DEFAULT_BREAK_MINUTES <= end) {

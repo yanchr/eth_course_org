@@ -1,4 +1,5 @@
 import type { BlockAnchor } from '../../types'
+import { cn } from '../../lib/cn'
 import { inputClass } from '../ui/Field'
 
 export interface AnchorTarget {
@@ -27,35 +28,43 @@ export function BlockAnchorEditor({
   targets,
   onChange,
   compact = false,
+  showPriority = true,
+  hideFixedTime = false,
 }: {
   value: BlockAnchor
   targets: AnchorTarget[]
   onChange: (anchor: BlockAnchor) => void
   compact?: boolean
+  showPriority?: boolean
+  hideFixedTime?: boolean
 }) {
+  const editorInputClass = cn(inputClass, 'h-10 min-w-0 rounded-lg')
   return (
     <div className={compact ? 'grid grid-cols-2 gap-1.5' : 'flex flex-col gap-2'}>
       <select
         aria-label="Anchor type"
-        className={inputClass}
+        className={editorInputClass}
         value={value.type}
         onChange={(event) => onChange(anchorFor(event.target.value as BlockAnchor['type'], targets))}
       >
         {TYPES.map(({ type, label }) => <option key={type} value={type}>{label}</option>)}
       </select>
-      {value.type === 'fixed' && (
+      {value.type === 'fixed' && !hideFixedTime && (
         <input
           aria-label="Fixed start time"
-          className={inputClass}
+          className={cn(
+            editorInputClass,
+            'flex w-full min-w-0 appearance-none items-center px-3 leading-none',
+          )}
           type="time"
           value={value.time}
           onChange={(event) => onChange({ type: 'fixed', time: event.target.value })}
         />
       )}
-      {(value.type === 'start' || value.type === 'end') && (
+      {showPriority && (value.type === 'start' || value.type === 'end') && (
         <input
           aria-label="Anchor priority"
-          className={inputClass}
+          className={editorInputClass}
           type="number"
           value={value.priority}
           onChange={(event) => onChange({ type: value.type, priority: Number(event.target.value) || 0 })}
@@ -64,7 +73,7 @@ export function BlockAnchorEditor({
       {(value.type === 'before' || value.type === 'after') && (
         <select
           aria-label={`${value.type} block`}
-          className={inputClass}
+          className={editorInputClass}
           value={value.targetId}
           onChange={(event) => onChange({ type: value.type, targetId: event.target.value })}
         >

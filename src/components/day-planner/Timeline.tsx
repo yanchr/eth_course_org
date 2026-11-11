@@ -248,9 +248,21 @@ export function Timeline({
       })
     }
     return withDayPlanDraft(dayPlan, {
-      todoQueue: dayPlan.todoQueue.map((todo) =>
-        todo.id === drag.id ? { ...todo, customDurationMinutes: drag.currentDuration } : todo,
-      ),
+      todoQueue: dayPlan.todoQueue.map((todo) => {
+        if (todo.id !== drag.id) return todo
+        if (todo.snappedStartMinute !== undefined && todo.snappedEndMinute !== undefined) {
+          const snappedEndMinute = Math.min(
+            DAY_END_MINUTES,
+            todo.snappedStartMinute + drag.currentDuration,
+          )
+          return {
+            ...todo,
+            snappedEndMinute,
+            customDurationMinutes: snappedEndMinute - todo.snappedStartMinute,
+          }
+        }
+        return { ...todo, customDurationMinutes: drag.currentDuration }
+      }),
     })
   }, [dayPlan, drag])
 
@@ -328,9 +340,22 @@ export function Timeline({
     } else {
       onCommitDayPlan((prev) => ({
         ...prev,
-        todoQueue: prev.todoQueue.map((todo) =>
-          todo.id === current.id ? { ...todo, customDurationMinutes: current.currentDuration } : todo,
-        ),
+        todoQueue: prev.todoQueue.map((todo) => {
+          if (todo.id !== current.id) return todo
+          if (todo.snappedStartMinute !== undefined && todo.snappedEndMinute !== undefined) {
+            const duration = Math.max(SNAP, current.currentDuration)
+            const snappedEndMinute = Math.min(
+              DAY_END_MINUTES,
+              todo.snappedStartMinute + duration,
+            )
+            return {
+              ...todo,
+              snappedEndMinute,
+              customDurationMinutes: snappedEndMinute - todo.snappedStartMinute,
+            }
+          }
+          return { ...todo, customDurationMinutes: current.currentDuration }
+        }),
       }))
     }
     setDrag(null)
@@ -381,9 +406,42 @@ export function Timeline({
     } else {
       onCommitDayPlan((prev) => ({
         ...prev,
-        todoQueue: prev.todoQueue.map((todo) => (todo.id === id ? { ...todo, customDurationMinutes: next } : todo)),
+        todoQueue: prev.todoQueue.map((todo) => {
+          if (todo.id !== id) return todo
+          if (todo.snappedStartMinute !== undefined && todo.snappedEndMinute !== undefined) {
+            const snappedEndMinute = Math.min(DAY_END_MINUTES, todo.snappedStartMinute + next)
+            return {
+              ...todo,
+              snappedEndMinute,
+              customDurationMinutes: snappedEndMinute - todo.snappedStartMinute,
+            }
+          }
+          return { ...todo, customDurationMinutes: next }
+        }),
       }))
     }
+  }
+
+  const adjustTodoEnd = (todoId: string, requestedEnd: number) => {
+    const scheduledStart = blocks.reduce(
+      (first, block) =>
+        block.kind === 'todo' && block.todoId === todoId ? Math.min(first, block.start) : first,
+      DAY_END_MINUTES,
+    )
+    onCommitDayPlan((prev) => ({
+      ...prev,
+      todoQueue: prev.todoQueue.map((todo) => {
+        if (todo.id !== todoId) return todo
+        const start = todo.snappedStartMinute ?? scheduledStart
+        const end = Math.max(start + SNAP, Math.min(DAY_END_MINUTES, requestedEnd))
+        return {
+          ...todo,
+          snappedStartMinute: start,
+          snappedEndMinute: end,
+          customDurationMinutes: end - start,
+        }
+      }),
+    }))
   }
 
   const nudgeActivityTime = (activityId: string, startMin: number, dir: -1 | 1) => {
@@ -572,6 +630,7 @@ export function Timeline({
                   onMoveTodo={moveTodo}
                   onNudgeResize={nudgeResize}
                   onNudgeActivityTime={nudgeActivityTime}
+                  onAdjustTodoEnd={adjustTodoEnd}
                 />
               ),
             )}
@@ -713,6 +772,7 @@ function PlanBlock({
   onMoveTodo,
   onNudgeResize,
   onNudgeActivityTime,
+  onAdjustTodoEnd,
 }: {
   block: Exclude<LaidOut, { kind: 'break' }>
   dayPlan: DayPlanState
@@ -730,7 +790,9 @@ function PlanBlock({
   onMoveTodo: (todoId: string, dir: -1 | 1) => void
   onNudgeResize: (target: 'todo' | 'activity' | 'break', id: string, currentDuration: number, dir: -1 | 1) => void
   onNudgeActivityTime: (activityId: string, startMin: number, dir: -1 | 1) => void
+  onAdjustTodoEnd: (todoId: string, endMinute: number) => void
 }) {
+  const [showEndEditor, setShowEndEditor] = useState(false)
   const { top, height } = blockBox(block.start, block.end)
   const inset = 3
   const todoItem = block.kind === 'todo' ? dayPlan.todoQueue.find((todo) => todo.id === block.todoId) : undefined
@@ -739,6 +801,10 @@ function PlanBlock({
     !!todoItem &&
     !!subject &&
     todoItem.categories.every((category) => getProgress(subject, todoItem.week, category) === 'completed')
+  const canAdjustEnd =
+    block.kind === 'todo' &&
+    !!todoItem &&
+    (todoItem.snappedEndMinute !== undefined || (allDone && dayPlan.date === toISODate(new Date())))
   const isLastPart = block.kind !== 'todo' || !block.part || block.part.index === block.part.of
   const dragging =
     (drag?.mode === 'reorder' && block.kind === 'todo' && drag.todoId === block.todoId) ||
@@ -765,7 +831,13 @@ function PlanBlock({
 
   const resizeTarget = block.kind === 'todo' ? block.todoId : block.activityId
   const resizeBase =
-    block.kind === 'todo' ? (todoItem ? todoTargetMinutes(todoItem, sessions) : block.targetMinutes) : block.end - block.start
+    block.kind === 'todo'
+      ? todoItem?.snappedEndMinute !== undefined
+        ? block.end - block.start
+        : todoItem
+          ? todoTargetMinutes(todoItem, sessions)
+          : block.targetMinutes
+      : block.end - block.start
 
   return (
     <div
@@ -775,7 +847,7 @@ function PlanBlock({
         height,
         left: `calc(${(block.lane / block.lanes) * 100}% + ${inset}px)`,
         width: `calc(${100 / block.lanes}% - ${inset * 2}px)`,
-        zIndex: dragging ? 25 : 10,
+        zIndex: showEndEditor ? 35 : dragging ? 25 : 10,
       }}
     >
       <div
@@ -825,8 +897,19 @@ function PlanBlock({
               </span>
             )}
           </span>
-          {height >= 32 && (
+          {height >= 32 && !canAdjustEnd && (
             <span className="truncate px-1.5 text-[10px] leading-tight text-zinc-500">{subtitle}</span>
+          )}
+          {height >= 32 && canAdjustEnd && block.kind === 'todo' && (
+            <button
+              type="button"
+              aria-expanded={showEndEditor}
+              aria-label={`Adjust end time, currently ${formatBlockRange(block.start, block.end)}`}
+              className="mx-1.5 mt-0.5 w-fit rounded-md bg-zinc-100 px-1.5 py-0.5 text-[10px] leading-tight font-medium text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900 focus-visible:outline-2 focus-visible:outline-zinc-900"
+              onClick={() => setShowEndEditor((open) => !open)}
+            >
+              {formatBlockRange(block.start, block.end)}
+            </button>
           )}
           {height >= 52 && block.kind === 'todo' && (
             <span className="truncate px-1.5 text-[10px] leading-tight text-zinc-400">{block.label}</span>
@@ -853,6 +936,31 @@ function PlanBlock({
           >
             <Play className="size-4 fill-current" />
           </button>
+        </div>
+      )}
+
+      {canAdjustEnd && block.kind === 'todo' && todoItem && showEndEditor && (
+        <div className="absolute top-8 left-1.5 z-40 flex min-w-52 flex-wrap items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg">
+          {[-15, -5, 5].map((minutes) => (
+            <button
+              key={minutes}
+              type="button"
+              className="inline-flex h-11 min-w-11 items-center justify-center rounded-lg px-2 text-[11px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-2 focus-visible:outline-zinc-900"
+              onClick={() => onAdjustTodoEnd(todoItem.id, block.end + minutes)}
+            >
+              {minutes > 0 ? `+${minutes}m` : `${minutes}m`}
+            </button>
+          ))}
+          <input
+            type="time"
+            aria-label="Exact todo end time"
+            className="h-11 min-w-0 flex-1 appearance-none rounded-lg border border-zinc-200 bg-white px-2 text-xs text-zinc-900 focus:border-zinc-900 focus:outline-none"
+            value={minutesToHHMM(todoItem.snappedEndMinute ?? block.end)}
+            onChange={(event) => {
+              const end = parseTimeRange(event.target.value)?.start
+              if (end !== undefined) onAdjustTodoEnd(todoItem.id, end)
+            }}
+          />
         </div>
       )}
 
@@ -898,6 +1006,7 @@ function PlanBlock({
 
       {isEditing &&
         block.kind === 'todo' &&
+        todoItem?.snappedEndMinute === undefined &&
         block.breaks.map((item) => {
           const span = block.end - block.start
           if (span <= 0) return null

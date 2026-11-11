@@ -51,7 +51,7 @@ export function TodoPicker({
       subjectId: subject.id,
       week,
       categories: [...picked],
-      sdMultiplier,
+      sdMultiplier: Number.isFinite(sdMultiplier) ? sdMultiplier : 1,
       anchor,
     }
     onChange([...todoQueue, item])
