@@ -263,31 +263,23 @@ export function Timeline({
 
   const toggleTodoComplete = (item: PlannedTodoItem, completed: boolean) => {
     if (completed && isToday) {
+      const now = new Date()
+      const completionMinute = now.getHours() * 60 + now.getMinutes()
       const parts = blocks
         .filter((block): block is TodoBlock => block.kind === 'todo' && block.todoId === item.id)
         .sort((a, b) => a.start - b.start)
       const firstStart = parts[0]?.start
-      if (firstStart !== undefined && nowMin > firstStart) {
-        let workMinutes = 0
-        for (const part of parts) {
-          if (part.end <= nowMin) {
-            workMinutes += part.workMinutes
-            continue
-          }
-          if (part.start >= nowMin) break
-          const elapsed = nowMin - part.start
-          const elapsedBreaks = part.breaks.reduce((sum, item) => {
-            const overlap = Math.max(0, Math.min(nowMin, item.end) - item.start)
-            return sum + overlap
-          }, 0)
-          workMinutes += Math.max(0, elapsed - elapsedBreaks)
-          break
-        }
-        const snapped = Math.max(5, Math.round(workMinutes))
+      if (firstStart !== undefined && completionMinute > firstStart) {
         onCommitDayPlan((prev) => ({
           ...prev,
           todoQueue: prev.todoQueue.map((todo) =>
-            todo.id === item.id ? { ...todo, customDurationMinutes: snapped } : todo
+            todo.id === item.id
+              ? {
+                  ...todo,
+                  snappedStartMinute: firstStart,
+                  snappedEndMinute: completionMinute,
+                }
+              : todo
           ),
         }))
       }
@@ -444,8 +436,8 @@ export function Timeline({
         </button>
         <button
           type="button"
-          aria-label="Reset edits"
-          title="Reset edits"
+          aria-label="Revert to settings"
+          title="Revert to settings"
           onClick={onResetEdits}
           className={cn(
             'inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-zinc-600',
@@ -454,7 +446,7 @@ export function Timeline({
           )}
         >
           <RotateCcw className="size-4" />
-          <span className="hidden sm:inline">Reset edits</span>
+          <span className="hidden sm:inline">Revert to settings</span>
         </button>
         <button
           type="button"

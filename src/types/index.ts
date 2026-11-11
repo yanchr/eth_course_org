@@ -106,6 +106,9 @@ export interface PlannedTodoItem {
   categories: string[]
   /** Set when the user resizes the block to override the statistical estimate. */
   customDurationMinutes?: number
+  /** Exact wall-clock bounds recorded when this todo is completed after it starts. */
+  snappedStartMinute?: number
+  snappedEndMinute?: number
   /** Statistical buffer applied to the historical standard deviation. Defaults to 1. */
   sdMultiplier: number
   /** Defaults to flow for saved plans created before todo anchors were introduced. */
@@ -133,6 +136,11 @@ export interface DayPlanState {
   breakOverrides?: Record<string, number>
   /** Day-scoped duration/time edits for reusable presets (and customs). */
   activityOverrides?: Record<string, ActivityOverride>
+  /** Last order and activity configuration explicitly saved through Configure. */
+  settingsBaselineOrder: string[]
+  settingsBaselineSelectedPresetIds: string[]
+  settingsBaselineCustomActivities: ActivityPreset[]
+  settingsBaselineActivityOverrides?: Record<string, ActivityOverride>
 }
 
 export interface PlannerData {

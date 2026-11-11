@@ -73,6 +73,9 @@ export function createDefaultDayPlan(
     selectedPresetIds: presets.filter((p) => p.isDefault).map((p) => p.id),
     customActivities: [],
     todoQueue: [],
+    settingsBaselineOrder: [],
+    settingsBaselineSelectedPresetIds: presets.filter((p) => p.isDefault).map((p) => p.id),
+    settingsBaselineCustomActivities: [],
   }
 }
 
@@ -266,6 +269,14 @@ function parsePlannedTodo(raw: unknown): PlannedTodoItem | null {
     raw.customDurationMinutes > 0
       ? Math.round(raw.customDurationMinutes)
       : undefined
+  const snappedStart =
+    typeof raw.snappedStartMinute === 'number' && Number.isFinite(raw.snappedStartMinute)
+      ? Math.max(0, Math.min(1440, Math.round(raw.snappedStartMinute)))
+      : undefined
+  const snappedEnd =
+    typeof raw.snappedEndMinute === 'number' && Number.isFinite(raw.snappedEndMinute)
+      ? Math.max(0, Math.min(1440, Math.round(raw.snappedEndMinute)))
+      : undefined
   return {
     id: str(raw.id) || createId(),
     subjectId,
@@ -279,6 +290,9 @@ function parsePlannedTodo(raw: unknown): PlannedTodoItem | null {
           : 1,
     anchor: parseAnchor(raw.anchor) ?? { type: 'flow' },
     ...(custom !== undefined ? { customDurationMinutes: custom } : {}),
+    ...(snappedStart !== undefined && snappedEnd !== undefined && snappedEnd > snappedStart
+      ? { snappedStartMinute: snappedStart, snappedEndMinute: snappedEnd }
+      : {}),
   }
 }
 
@@ -331,14 +345,28 @@ function parseDayPlan(raw: unknown, presets: ActivityPreset[]): DayPlanState {
     : []
   const breakOverrides = parseBreakOverrides(raw.breakOverrides)
   const activityOverrides = parseActivityOverrides(raw.activityOverrides)
+  const settingsBaselineOrder = Array.isArray(raw.settingsBaselineOrder)
+    ? raw.settingsBaselineOrder.filter((id): id is string => typeof id === 'string')
+    : todoQueue.map((todo) => todo.id)
+  const settingsBaselineSelectedPresetIds = Array.isArray(raw.settingsBaselineSelectedPresetIds)
+    ? raw.settingsBaselineSelectedPresetIds.filter((id): id is string => typeof id === 'string')
+    : selectedPresetIds
+  const settingsBaselineCustomActivities = Array.isArray(raw.settingsBaselineCustomActivities)
+    ? raw.settingsBaselineCustomActivities.map(parseActivityPreset).filter((activity) => activity !== null)
+    : customActivities
+  const settingsBaselineActivityOverrides = parseActivityOverrides(raw.settingsBaselineActivityOverrides)
   return {
     date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : defaults.date,
     dayStartTime: HHMM.test(dayStartTime) ? dayStartTime : defaults.dayStartTime,
     selectedPresetIds,
     customActivities,
     todoQueue,
+    settingsBaselineOrder,
+    settingsBaselineSelectedPresetIds,
+    settingsBaselineCustomActivities,
     ...(breakOverrides ? { breakOverrides } : {}),
     ...(activityOverrides ? { activityOverrides } : {}),
+    ...(settingsBaselineActivityOverrides ? { settingsBaselineActivityOverrides } : {}),
   }
 }
 

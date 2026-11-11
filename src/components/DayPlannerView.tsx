@@ -42,7 +42,49 @@ export function DayPlannerView() {
       const set = new Set(prev.selectedPresetIds)
       if (selected) set.add(id)
       else set.delete(id)
-      return { ...prev, selectedPresetIds: [...set] }
+      const selectedPresetIds = [...set]
+      return {
+        ...prev,
+        selectedPresetIds,
+        settingsBaselineSelectedPresetIds: selectedPresetIds,
+        settingsBaselineCustomActivities: prev.customActivities,
+        settingsBaselineActivityOverrides: prev.settingsBaselineActivityOverrides,
+      }
+    })
+  }
+
+  const updateActivitySettings = (
+    patch: Partial<typeof dayPlan> | ((prev: typeof dayPlan) => typeof dayPlan),
+  ) => {
+    updateDayPlan((prev) => {
+      const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }
+      const activeIds = new Set([
+        ...next.selectedPresetIds,
+        ...next.customActivities.map((activity) => activity.id),
+      ])
+      const settingsBaselineActivityOverrides = Object.fromEntries(
+        [...activeIds].flatMap((id) => {
+          const previous = prev.settingsBaselineActivityOverrides?.[id]
+          const configuredAnchor = next.activityOverrides?.[id]?.anchor
+          const configured = {
+            ...previous,
+            ...(configuredAnchor ? { anchor: configuredAnchor } : {}),
+          }
+          return Object.keys(configured).length > 0 ? [[id, configured]] : []
+        }),
+      )
+      return {
+        ...next,
+        settingsBaselineSelectedPresetIds: [...next.selectedPresetIds],
+        settingsBaselineCustomActivities: next.customActivities.map((activity) => ({
+          ...activity,
+          anchor: { ...activity.anchor },
+        })),
+        settingsBaselineActivityOverrides:
+          Object.keys(settingsBaselineActivityOverrides).length > 0
+            ? settingsBaselineActivityOverrides
+            : undefined,
+      }
     })
   }
 
@@ -52,21 +94,31 @@ export function DayPlannerView() {
     }
   }
 
-  const resetEdits = () => {
-    updateDayPlan((prev) => ({
-      date: prev.date,
-      dayStartTime: prev.dayStartTime,
-      selectedPresetIds: prev.selectedPresetIds,
-      customActivities: prev.customActivities,
-      todoQueue: prev.todoQueue.map((todo) => ({
-        id: todo.id,
-        subjectId: todo.subjectId,
-        week: todo.week,
-        categories: todo.categories,
-        sdMultiplier: todo.sdMultiplier,
-        anchor: todo.anchor,
-      })),
-    }))
+  const revertToSettings = () => {
+    updateDayPlan((prev) => {
+      const byId = new Map(prev.todoQueue.map((todo) => [todo.id, todo]))
+      const baselineTodos = prev.settingsBaselineOrder
+        .map((id) => byId.get(id))
+        .filter((todo): todo is PlannedTodoItem => todo !== undefined)
+      const baselineIds = new Set(prev.settingsBaselineOrder)
+      const ordered = [...baselineTodos, ...prev.todoQueue.filter((todo) => !baselineIds.has(todo.id))]
+      return {
+        ...prev,
+        selectedPresetIds: [...prev.settingsBaselineSelectedPresetIds],
+        customActivities: prev.settingsBaselineCustomActivities.map((activity) => ({
+          ...activity,
+          anchor: { ...activity.anchor },
+        })),
+        todoQueue: ordered.map(({
+          customDurationMinutes: _customDurationMinutes,
+          snappedStartMinute: _snappedStartMinute,
+          snappedEndMinute: _snappedEndMinute,
+          ...todo
+        }) => todo),
+        breakOverrides: undefined,
+        activityOverrides: prev.settingsBaselineActivityOverrides,
+      }
+    })
   }
 
   const clearDay = () => {
@@ -76,6 +128,10 @@ export function DayPlannerView() {
       selectedPresetIds: activityPresets.filter((preset) => preset.isDefault).map((preset) => preset.id),
       customActivities: [],
       todoQueue: [],
+      settingsBaselineOrder: [],
+      settingsBaselineSelectedPresetIds: activityPresets.filter((preset) => preset.isDefault).map((preset) => preset.id),
+      settingsBaselineCustomActivities: [],
+      settingsBaselineActivityOverrides: undefined,
     }))
     setConfigureOpen(false)
   }
@@ -89,7 +145,7 @@ export function DayPlannerView() {
         subjects={subjects}
         isEditing={isEditing}
         onToggleEditing={() => setIsEditing((value) => !value)}
-        onResetEdits={resetEdits}
+        onResetEdits={revertToSettings}
         onConfigure={() => setConfigureOpen(true)}
         onCommitDayPlan={updateDayPlan}
         onToggleTodoComplete={toggleTodoComplete}
@@ -137,7 +193,10 @@ export function DayPlannerView() {
                   .map((preset) => ({ id: preset.id, label: preset.name })),
                 ...dayPlan.customActivities.map((activity) => ({ id: activity.id, label: activity.name })),
               ]}
-              onChange={(todoQueue) => updateDayPlan({ todoQueue })}
+              onChange={(todoQueue) => updateDayPlan({
+                todoQueue,
+                settingsBaselineOrder: todoQueue.map((todo) => todo.id),
+              })}
             />
           </div>
 
@@ -151,7 +210,7 @@ export function DayPlannerView() {
               onTogglePreset={togglePreset}
               onUpsertPreset={upsertActivityPreset}
               onDeletePreset={deleteActivityPreset}
-              onUpdateDayPlan={updateDayPlan}
+              onUpdateDayPlan={updateActivitySettings}
             />
           </div>
         </div>

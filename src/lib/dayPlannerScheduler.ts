@@ -11,6 +11,7 @@ import { formatMinutes, parseTimeRange } from './semester'
 
 export const WORK_BLOCK_MINUTES = 50
 export const DEFAULT_BREAK_MINUTES = 10
+export const MIN_FLOW_GAP_MINUTES = 20
 export const DAY_END_MINUTES = 1440
 
 export interface TimelineBreak {
@@ -125,11 +126,15 @@ function activeItems(
 
   const todos = dayPlan.todoQueue.map((todo, order): Schedulable => {
     const work = todoTargetMinutes(todo, sessions)
+    const snappedDuration =
+      todo.snappedStartMinute !== undefined && todo.snappedEndMinute !== undefined
+        ? todo.snappedEndMinute - todo.snappedStartMinute
+        : undefined
     return {
       id: todo.id,
       kind: 'todo',
       anchor: todo.anchor ?? { type: 'flow' },
-      duration: todoTotalSpan(work),
+      duration: snappedDuration ?? todoTotalSpan(work),
       order,
       todo,
     }
@@ -190,7 +195,40 @@ function renderExactTodo(ctx: ScheduleContext, item: Schedulable, start: number)
   return cursor
 }
 
+function renderSnappedTodo(ctx: ScheduleContext, item: Schedulable): Placement {
+  const todo = item.todo!
+  const start = Math.max(0, Math.min(todo.snappedStartMinute!, DAY_END_MINUTES))
+  const end = Math.max(start, Math.min(todo.snappedEndMinute!, DAY_END_MINUTES))
+  const breaks: TimelineBreak[] = []
+  let cursor = start + WORK_BLOCK_MINUTES
+  while (cursor + DEFAULT_BREAK_MINUTES <= end) {
+    const breakEnd = cursor + DEFAULT_BREAK_MINUTES
+    if (breakEnd <= end) {
+      const key = `break:${ctx.breakIndex++}`
+      breaks.push({ breakKey: key, start: cursor, end: breakEnd })
+    }
+    cursor = breakEnd + WORK_BLOCK_MINUTES
+  }
+  const breakMinutes = breaks.reduce((sum, item) => sum + item.end - item.start, 0)
+  ctx.blocks.push({
+    ...todoWorkBlock(todo, Math.max(5, end - start - breakMinutes), start, end),
+    id: `todo:${todo.id}:snapped`,
+    workMinutes: Math.max(0, end - start - breakMinutes),
+    breakMinutes,
+    breaks,
+  })
+  const placement = { id: item.id, kind: item.kind, start, end }
+  ctx.placed.set(item.id, placement)
+  return placement
+}
+
 function placeExact(ctx: ScheduleContext, item: Schedulable, requestedStart: number): Placement {
+  if (
+    item.todo?.snappedStartMinute !== undefined &&
+    item.todo.snappedEndMinute !== undefined
+  ) {
+    return renderSnappedTodo(ctx, item)
+  }
   const start = Math.max(0, Math.min(requestedStart, DAY_END_MINUTES))
   let end: number
   if (item.kind === 'activity') {
@@ -261,6 +299,12 @@ function scheduleFlowActivity(ctx: ScheduleContext, item: Schedulable, cursor: n
 }
 
 function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor: number): number {
+  if (
+    item.todo?.snappedStartMinute !== undefined &&
+    item.todo.snappedEndMinute !== undefined
+  ) {
+    return Math.max(initialCursor, renderSnappedTodo(ctx, item).end)
+  }
   const todo = item.todo!
   const target = todoTargetMinutes(todo, ctx.sessions)
   let remaining = target
@@ -277,6 +321,21 @@ function scheduleFlowTodo(ctx: ScheduleContext, item: Schedulable, initialCursor
     }
     const barrier = placements.find((block) => block.start >= cursor)
     const gapEnd = barrier?.start ?? DAY_END_MINUTES
+    const gapMinutes = gapEnd - cursor
+    const firstWorkCapacity = Math.max(0, WORK_BLOCK_MINUTES - workStreak)
+    const remainingTotalSpan =
+      remaining <= firstWorkCapacity
+        ? remaining
+        : firstWorkCapacity + DEFAULT_BREAK_MINUTES + todoTotalSpan(remaining - firstWorkCapacity)
+    if (
+      barrier &&
+      gapMinutes < MIN_FLOW_GAP_MINUTES &&
+      remainingTotalSpan > gapMinutes
+    ) {
+      cursor = barrier.end
+      if (barrier.kind === 'activity') workStreak = 0
+      continue
+    }
 
     if (workStreak >= WORK_BLOCK_MINUTES) {
       const { key, duration } = nextBreak(ctx)
@@ -352,7 +411,7 @@ function coalesceTimeline(blocks: TimelineBlock[]): TimelineBlock[] {
       continue
     }
     const works = [first]
-    const breaks: TimelineBreak[] = []
+    const breaks: TimelineBreak[] = [...first.breaks]
     let end = first.end
     index++
     while (index < sorted.length) {
