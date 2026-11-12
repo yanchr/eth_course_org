@@ -865,6 +865,11 @@ function PlanBlock({
           ? todoTargetMinutes(todoItem, sessions)
           : block.targetMinutes
       : block.end - block.start
+  const initialBreakMinutes =
+    block.kind === 'todo'
+      ? (block.breaks.find((item) => item.start === block.start)?.end ?? block.start) - block.start
+      : 0
+  const initialBreakPx = initialBreakMinutes * PX_PER_MIN
 
   return (
     <div
@@ -898,6 +903,7 @@ function PlanBlock({
           block.breaks.map((item) => {
             const span = block.end - block.start
             if (span <= 0) return null
+            const isInitialBreak = item.start === block.start
             const active = drag?.mode === 'resize' && drag.target === 'break' && drag.id === item.breakKey
             return (
               <div
@@ -906,16 +912,23 @@ function PlanBlock({
                   'absolute inset-x-0 z-[1] flex items-center border-y border-emerald-500/30 bg-emerald-500/15 px-2 text-[10px] text-emerald-700 dark:text-emerald-300',
                   active && 'bg-emerald-500/25',
                 )}
-                style={{
-                  top: `${((item.start - block.start) / span) * 100}%`,
-                  height: `${((item.end - item.start) / span) * 100}%`,
-                }}
+                style={
+                  isInitialBreak
+                    ? { top: 0, height: (item.end - item.start) * PX_PER_MIN }
+                    : {
+                        top: `${((item.start - block.start) / span) * 100}%`,
+                        height: `${((item.end - item.start) / span) * 100}%`,
+                      }
+                }
               >
                 Break · {item.end - item.start}m
               </div>
             )
           })}
-        <div className={cn('relative z-10 flex h-full flex-col', isEditing && 'pl-9', block.kind === 'todo' && 'pr-[5.5rem]')}>
+        <div
+          className={cn('relative z-10 flex h-full flex-col', isEditing && 'pl-9', block.kind === 'todo' && 'pr-[5.5rem]')}
+          style={initialBreakPx > 0 ? { paddingTop: initialBreakPx } : undefined}
+        >
           <span className="flex items-center gap-1 px-1.5 pt-1 text-[12px] leading-tight font-semibold text-zinc-900">
             <span className="truncate">{title}</span>
             {block.kind === 'todo' && block.part && (
@@ -945,7 +958,10 @@ function PlanBlock({
       </div>
 
       {block.kind === 'todo' && todoItem && (
-        <div className="absolute top-0.5 right-0.5 z-20 flex">
+        <div
+          className="absolute right-0.5 z-20 flex"
+          style={{ top: initialBreakPx + 2 }}
+        >
           <button
             type="button"
             aria-label={allDone ? 'Mark incomplete' : 'Mark complete'}
@@ -994,7 +1010,8 @@ function PlanBlock({
       {isEditing && (
         <HandleButton
           label={block.kind === 'todo' ? 'Reorder todo' : 'Shift activity time'}
-          className="absolute top-0 left-0 z-20 flex size-11 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900"
+          className="absolute left-0 z-20 flex size-11 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-700 focus-visible:outline-2 focus-visible:outline-zinc-900"
+          style={{ top: initialBreakPx }}
           onPointerDown={(event) => {
             if (block.kind === 'todo') onStartReorder(block.todoId, event)
             else onStartShift(block.activityId, block.start, event)

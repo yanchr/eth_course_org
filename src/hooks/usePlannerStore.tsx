@@ -82,6 +82,11 @@ interface PlannerStore {
 const PlannerContext = createContext<PlannerStore | null>(null)
 
 const PERSIST_DELAY_MS = 250
+const ROLLOVER_CHECK_MS = 60_000
+
+function getTodayYYYYMMDD(): string {
+  return toISODate(new Date())
+}
 
 export function PlannerProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<PlannerData>(loadData)
@@ -103,6 +108,40 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('pagehide', flush)
       window.removeEventListener('storage', onStorage)
+    }
+  }, [])
+
+  useEffect(() => {
+    const rolloverIfNeeded = () => {
+      const currentRealDate = getTodayYYYYMMDD()
+      setData((prev) => {
+        if (prev.lastRolloverDate === currentRealDate) return prev
+        const dayPlansByDate = {
+          ...prev.dayPlansByDate,
+          [prev.dayPlan.date]: prev.dayPlan,
+        }
+        const dayPlan =
+          dayPlansByDate[currentRealDate] ??
+          createDefaultDayPlan(prev.activityPresets, currentRealDate)
+        return {
+          ...prev,
+          lastRolloverDate: currentRealDate,
+          dayPlan,
+          dayPlansByDate: { ...dayPlansByDate, [currentRealDate]: dayPlan },
+        }
+      })
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') rolloverIfNeeded()
+    }
+    rolloverIfNeeded()
+    window.addEventListener('focus', rolloverIfNeeded)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    const interval = window.setInterval(rolloverIfNeeded, ROLLOVER_CHECK_MS)
+    return () => {
+      window.removeEventListener('focus', rolloverIfNeeded)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.clearInterval(interval)
     }
   }, [])
 
@@ -299,19 +338,47 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
 
   const updateDayPlan = useCallback(
     (patch: Partial<DayPlanState> | ((prev: DayPlanState) => DayPlanState)) => {
-      setData((prev) => ({
-        ...prev,
-        dayPlan: typeof patch === 'function' ? patch(prev.dayPlan) : { ...prev.dayPlan, ...patch },
-      }))
+      setData((prev) => {
+        const requested =
+          typeof patch === 'function' ? patch(prev.dayPlan) : { ...prev.dayPlan, ...patch }
+        const savedPlans = {
+          ...prev.dayPlansByDate,
+          [prev.dayPlan.date]: prev.dayPlan,
+        }
+        if (requested.date !== prev.dayPlan.date) {
+          const dayPlan =
+            savedPlans[requested.date] ??
+            createDefaultDayPlan(prev.activityPresets, requested.date)
+          return {
+            ...prev,
+            dayPlan,
+            dayPlansByDate: { ...savedPlans, [dayPlan.date]: dayPlan },
+          }
+        }
+        return {
+          ...prev,
+          dayPlan: requested,
+          dayPlansByDate: { ...savedPlans, [requested.date]: requested },
+        }
+      })
     },
     [],
   )
 
   const resetDayPlan = useCallback((date?: string) => {
-    setData((prev) => ({
-      ...prev,
-      dayPlan: createDefaultDayPlan(prev.activityPresets, date ?? toISODate(new Date())),
-    }))
+    setData((prev) => {
+      const targetDate = date ?? getTodayYYYYMMDD()
+      const dayPlan = createDefaultDayPlan(prev.activityPresets, targetDate)
+      return {
+        ...prev,
+        dayPlan,
+        dayPlansByDate: {
+          ...prev.dayPlansByDate,
+          [prev.dayPlan.date]: prev.dayPlan,
+          [targetDate]: dayPlan,
+        },
+      }
+    })
   }, [])
 
   const upsertActivityPreset = useCallback((preset: ActivityPreset) => {

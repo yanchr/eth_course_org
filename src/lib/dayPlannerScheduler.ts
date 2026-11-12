@@ -13,6 +13,7 @@ export const WORK_BLOCK_MINUTES = 50
 export const DEFAULT_BREAK_MINUTES = 10
 export const LECTURE_WORK_BLOCK_MINUTES = 45
 export const LECTURE_BREAK_MINUTES = 15
+export const FIXED_TODO_PRE_BREAK_MINUTES = 15
 export const DEFAULT_MIN_BREAK_TAIL_MINUTES = 30
 export const MIN_FLOW_GAP_MINUTES = 20
 export const DAY_END_MINUTES = 1440
@@ -195,16 +196,21 @@ function hasPreviousTodo(ctx: ScheduleContext, todoId: string, start: number): b
   )
 }
 
-/** Render an anchored todo at an exact start, with internal break stripes. */
-function renderExactTodo(ctx: ScheduleContext, item: Schedulable, start: number): number {
+/** Render an anchored todo at an exact work start, with internal break stripes. */
+function renderExactTodo(
+  ctx: ScheduleContext,
+  item: Schedulable,
+  start: number,
+  attachedInitialBreak?: TimelineBreak,
+): number {
   const todo = item.todo!
   const target = todoTargetMinutes(todo, ctx.sessions)
   const rhythm = todoRhythm(todo)
   const minTail = ctx.dayPlan.minBreakTailMinutes ?? DEFAULT_MIN_BREAK_TAIL_MINUTES
   let remaining = target
   let cursor = Math.max(0, start)
-  let initialBreak: TimelineBreak | undefined
-  if (hasPreviousTodo(ctx, todo.id, cursor) && cursor + DEFAULT_BREAK_MINUTES < DAY_END_MINUTES) {
+  let initialBreak = attachedInitialBreak
+  if (!initialBreak && hasPreviousTodo(ctx, todo.id, cursor) && cursor + DEFAULT_BREAK_MINUTES < DAY_END_MINUTES) {
     const key = `break:${ctx.breakIndex++}`
     initialBreak = { breakKey: key, start: cursor, end: cursor + DEFAULT_BREAK_MINUTES }
     cursor += DEFAULT_BREAK_MINUTES
@@ -294,7 +300,12 @@ function renderSnappedTodo(ctx: ScheduleContext, item: Schedulable): Placement {
   return placement
 }
 
-function placeExact(ctx: ScheduleContext, item: Schedulable, requestedStart: number): Placement {
+function placeExact(
+  ctx: ScheduleContext,
+  item: Schedulable,
+  requestedStart: number,
+  attachedInitialBreak?: TimelineBreak,
+): Placement {
   if (
     item.todo?.snappedStartMinute !== undefined &&
     item.todo.snappedEndMinute !== undefined
@@ -302,6 +313,7 @@ function placeExact(ctx: ScheduleContext, item: Schedulable, requestedStart: num
     return renderSnappedTodo(ctx, item)
   }
   const start = Math.max(0, Math.min(requestedStart, DAY_END_MINUTES))
+  let placementStart = attachedInitialBreak?.start ?? start
   let end: number
   if (item.kind === 'activity') {
     end = Math.min(DAY_END_MINUTES, start + item.duration)
@@ -316,9 +328,10 @@ function placeExact(ctx: ScheduleContext, item: Schedulable, requestedStart: num
       truncated: end - start < item.duration,
     })
   } else {
-    end = renderExactTodo(ctx, item, start)
+    end = renderExactTodo(ctx, item, start, attachedInitialBreak)
   }
-  const placement = { id: item.id, kind: item.kind, start, end }
+  placementStart = Math.max(0, placementStart)
+  const placement = { id: item.id, kind: item.kind, start: placementStart, end }
   ctx.placed.set(item.id, placement)
   return placement
 }
@@ -350,6 +363,52 @@ function resolveKnown(ctx: ScheduleContext, id: string, visited = new Set<string
 
 function occupied(ctx: ScheduleContext): Placement[] {
   return [...ctx.placed.values()].sort((a, b) => a.start - b.start || a.end - b.end)
+}
+
+function activityOverlaps(ctx: ScheduleContext, start: number, end: number): boolean {
+  if ([...ctx.placed.values()].some(
+    (placement) => placement.kind === 'activity' && placement.start < end && placement.end > start,
+  )) {
+    return true
+  }
+  return ctx.all.some((candidate) => {
+    if (candidate.kind !== 'activity' || candidate.anchor.type !== 'fixed') return false
+    const candidateStart = parseHHMM(candidate.anchor.time)
+    return candidateStart !== null && candidateStart < end && candidateStart + candidate.duration > start
+  })
+}
+
+function hasTodoThatCanPrecede(ctx: ScheduleContext, item: Schedulable, fixedStart: number): boolean {
+  if ([...ctx.placed.values()].some(
+    (placement) => placement.kind === 'todo' && placement.id !== item.id && placement.end <= fixedStart,
+  )) {
+    return true
+  }
+  return ctx.all.some((candidate) => {
+    if (candidate.kind !== 'todo' || candidate.id === item.id) return false
+    if (candidate.anchor.type === 'flow' || candidate.anchor.type === 'start') return true
+    if (candidate.anchor.type === 'before' && candidate.anchor.targetId === item.id) return true
+    if (candidate.anchor.type !== 'fixed') return false
+    const candidateStart = parseHHMM(candidate.anchor.time)
+    return candidateStart !== null && candidateStart < fixedStart
+  })
+}
+
+function fixedTodoInitialBreak(
+  ctx: ScheduleContext,
+  item: Schedulable,
+  fixedStart: number,
+): TimelineBreak | undefined {
+  if (item.kind !== 'todo' || fixedStart < FIXED_TODO_PRE_BREAK_MINUTES) return undefined
+  const start = fixedStart - FIXED_TODO_PRE_BREAK_MINUTES
+  if (!hasTodoThatCanPrecede(ctx, item, fixedStart) || activityOverlaps(ctx, start, fixedStart)) {
+    return undefined
+  }
+  return {
+    breakKey: `break:${ctx.breakIndex++}`,
+    start,
+    end: fixedStart,
+  }
 }
 
 function advancePastOccupied(cursor: number, placements: Placement[]): number {
@@ -608,7 +667,8 @@ export function scheduleDayPlan(
   const fixed = all.filter((item) => item.anchor.type === 'fixed')
   for (const item of fixed) {
     if (ctx.placed.has(item.id) || item.anchor.type !== 'fixed') continue
-    placeExact(ctx, item, parseHHMM(item.anchor.time) ?? dayStart)
+    const fixedStart = parseHHMM(item.anchor.time) ?? dayStart
+    placeExact(ctx, item, fixedStart, fixedTodoInitialBreak(ctx, item, fixedStart))
   }
   for (const item of fixed) resolveKnown(ctx, item.id)
 

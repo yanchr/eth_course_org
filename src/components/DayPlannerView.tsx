@@ -9,8 +9,6 @@ import { ActivityPresetsPanel } from './day-planner/ActivityPresetsPanel'
 import { Timeline } from './day-planner/Timeline'
 import { cn } from '../lib/cn'
 
-/** One automatic reset per calendar day, so a date picked in Configure survives tab changes. */
-let dailyResetFor = ''
 const CLEAR_HOLD_MS = 1200
 
 function LongPressClearButton({ onConfirm }: { onConfirm: () => void }) {
@@ -98,7 +96,6 @@ export function DayPlannerView() {
     subjects,
     settings,
     updateDayPlan,
-    resetDayPlan,
     upsertActivityPreset,
     deleteActivityPreset,
     setProgress,
@@ -109,13 +106,6 @@ export function DayPlannerView() {
   const defaultWeek = currentWeek(settings.semesterStartDate, settings.weekCount)
   const [isEditing, setIsEditing] = useState(false)
   const [configureOpen, setConfigureOpen] = useState(false)
-
-  useEffect(() => {
-    const today = toISODate(new Date())
-    if (dailyResetFor === today) return
-    dailyResetFor = today
-    if (dayPlan.date !== today) resetDayPlan(today)
-  }, [dayPlan.date, resetDayPlan])
 
   const togglePreset = (id: string, selected: boolean) => {
     updateDayPlan((prev) => {
@@ -248,12 +238,14 @@ export function DayPlannerView() {
             <Field
               label="Date"
               type="date"
+              className="min-w-0"
               value={dayPlan.date}
               onChange={(event) => updateDayPlan({ date: event.target.value || toISODate(new Date()) })}
             />
             <Field
               label="Day start"
               type="time"
+              className="min-w-0"
               value={dayPlan.dayStartTime}
               onChange={(event) => updateDayPlan({ dayStartTime: event.target.value || '08:00' })}
             />

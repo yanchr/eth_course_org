@@ -2,7 +2,7 @@ import { useId, type InputHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../../lib/cn'
 
 export const inputClass = cn(
-  'h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400',
+  'h-11 min-w-0 w-full box-border rounded-xl border border-zinc-200 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400',
   'transition-colors duration-150 ease-out hover:border-zinc-300',
   'focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10',
 )

@@ -154,6 +154,10 @@ export interface PlannerData {
   studySessions: StudySession[]
   activeStudy: ActiveStudy | null
   activityPresets: ActivityPreset[]
+  /** Local calendar date on which the last automatic day rollover ran. */
+  lastRolloverDate: string
+  /** Saved plans by local calendar date, including the currently active plan. */
+  dayPlansByDate?: Record<string, DayPlanState>
   dayPlan: DayPlanState
 }
 

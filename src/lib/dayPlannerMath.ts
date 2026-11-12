@@ -99,12 +99,16 @@ export function combinedTodoStats(
   return { mean, sd, n: Math.min(...individual.map((stats) => stats.n)) }
 }
 
-/** Target work minutes: custom override, or round(μ + multiplier × σ). */
+/** Target work minutes: custom override, quantized lecture hours, or round(μ + multiplier × σ). */
 export function todoTargetMinutes(item: PlannedTodoItem, sessions: StudySession[]): number {
   if (item.customDurationMinutes != null && item.customDurationMinutes > 0) {
     return Math.round(item.customDurationMinutes)
   }
   const { mean, sd } = combinedTodoStats(sessions, item.subjectId, item.categories)
+  if (item.breakStyle === 'lecture') {
+    const lectureHours = Math.max(1, Math.round(mean / 55))
+    return 45 * lectureHours
+  }
   return Math.max(5, Math.round(mean + item.sdMultiplier * sd))
 }
 

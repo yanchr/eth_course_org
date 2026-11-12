@@ -82,6 +82,7 @@ export function createDefaultDayPlan(
 
 export function createDefaultData(): PlannerData {
   const activityPresets = createDefaultActivityPresets()
+  const dayPlan = createDefaultDayPlan(activityPresets)
   return {
     version: 1,
     settings: { semesterStartDate: DEFAULT_SEMESTER_START, weekCount: WEEK_COUNT },
@@ -89,7 +90,9 @@ export function createDefaultData(): PlannerData {
     studySessions: [],
     activeStudy: null,
     activityPresets,
-    dayPlan: createDefaultDayPlan(activityPresets),
+    lastRolloverDate: dayPlan.date,
+    dayPlansByDate: { [dayPlan.date]: dayPlan },
+    dayPlan,
   }
 }
 
@@ -386,6 +389,16 @@ export function parsePlannerData(raw: unknown): PlannerData | null {
     ? raw.activityPresets.map(parseActivityPreset).filter((a) => a !== null)
     : defaults.activityPresets
   const presets = activityPresets.length > 0 ? activityPresets : defaults.activityPresets
+  const dayPlan = parseDayPlan(raw.dayPlan, presets)
+  const dayPlansByDate: Record<string, DayPlanState> = {}
+  if (isObject(raw.dayPlansByDate)) {
+    for (const [date, plan] of Object.entries(raw.dayPlansByDate)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+      dayPlansByDate[date] = { ...parseDayPlan(plan, presets), date }
+    }
+  }
+  dayPlansByDate[dayPlan.date] = dayPlan
+  const savedRolloverDate = str(raw.lastRolloverDate)
   return {
     version: 1,
     settings: {
@@ -398,7 +411,12 @@ export function parsePlannerData(raw: unknown): PlannerData | null {
       : [],
     activeStudy: parseActiveStudy(raw.activeStudy),
     activityPresets: presets,
-    dayPlan: parseDayPlan(raw.dayPlan, presets),
+    lastRolloverDate:
+      /^\d{4}-\d{2}-\d{2}$/.test(savedRolloverDate)
+        ? savedRolloverDate
+        : toISODate(new Date()),
+    dayPlansByDate,
+    dayPlan,
   }
 }
 
