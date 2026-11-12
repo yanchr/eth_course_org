@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { currentWeek, toISODate } from '../lib/semester'
-import type { PlannedTodoItem } from '../types'
+import type { ActiveStudy, PlannedTodoItem } from '../types'
 import { Field } from './ui/Field'
 import { Sheet } from './ui/Sheet'
 import { TodoPicker } from './day-planner/TodoPicker'
@@ -10,6 +10,19 @@ import { Timeline } from './day-planner/Timeline'
 import { cn } from '../lib/cn'
 
 const CLEAR_HOLD_MS = 1200
+
+function isActiveTodo(
+  item: PlannedTodoItem,
+  active: ActiveStudy | null,
+): boolean {
+  return (
+    active !== null &&
+    active.subjectId === item.subjectId &&
+    active.week === item.week &&
+    active.categories.length === item.categories.length &&
+    active.categories.every((category, index) => category === item.categories[index])
+  )
+}
 
 function LongPressClearButton({ onConfirm }: { onConfirm: () => void }) {
   const timerRef = useRef<number | null>(null)
@@ -100,6 +113,9 @@ export function DayPlannerView() {
     deleteActivityPreset,
     setProgress,
     switchStudy,
+    pauseStudy,
+    resumeStudy,
+    stopStudy,
   } = usePlanner()
 
   const { dayPlan, activityPresets, studySessions } = data
@@ -159,8 +175,19 @@ export function DayPlannerView() {
   }
 
   const toggleTodoComplete = (item: PlannedTodoItem, completed: boolean) => {
+    if (completed && isActiveTodo(item, data.activeStudy)) stopStudy()
     for (const category of item.categories) {
       setProgress(item.subjectId, item.week, category, completed ? 'completed' : 'pending')
+    }
+  }
+
+  const toggleTodoStudy = (item: PlannedTodoItem) => {
+    if (!isActiveTodo(item, data.activeStudy)) {
+      switchStudy(item.subjectId, item.week, item.categories)
+    } else if (data.activeStudy?.resumedAt === null) {
+      resumeStudy()
+    } else {
+      pauseStudy()
     }
   }
 
@@ -214,13 +241,14 @@ export function DayPlannerView() {
         presets={activityPresets}
         sessions={studySessions}
         subjects={subjects}
+        activeStudy={data.activeStudy}
         isEditing={isEditing}
         onToggleEditing={() => setIsEditing((value) => !value)}
         onResetEdits={revertToSettings}
         onConfigure={() => setConfigureOpen(true)}
         onCommitDayPlan={updateDayPlan}
         onToggleTodoComplete={toggleTodoComplete}
-        onStartStudy={(item) => switchStudy(item.subjectId, item.week, item.categories)}
+        onToggleStudy={toggleTodoStudy}
       />
 
       <Sheet

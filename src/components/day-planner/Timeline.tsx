@@ -9,8 +9,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
-import { Check, GripVertical, Lock, Play, RotateCcw, SlidersHorizontal, Unlock } from 'lucide-react'
+import { Check, GripVertical, Lock, Pause, Play, RotateCcw, SlidersHorizontal, Unlock } from 'lucide-react'
 import type {
+  ActiveStudy,
   ActivityPreset,
   DayPlanState,
   PlannedTodoItem,
@@ -67,13 +68,14 @@ interface TimelineProps {
   presets: ActivityPreset[]
   sessions: StudySession[]
   subjects: Subject[]
+  activeStudy: ActiveStudy | null
   isEditing: boolean
   onToggleEditing: () => void
   onResetEdits: () => void
   onConfigure: () => void
   onCommitDayPlan: (patch: Partial<DayPlanState> | ((prev: DayPlanState) => DayPlanState)) => void
   onToggleTodoComplete: (item: PlannedTodoItem, completed: boolean) => void
-  onStartStudy: (item: PlannedTodoItem) => void
+  onToggleStudy: (item: PlannedTodoItem) => void
 }
 
 type LaidOut = TimelineBlock & { lane: number; lanes: number }
@@ -180,13 +182,14 @@ export function Timeline({
   presets,
   sessions,
   subjects,
+  activeStudy,
   isEditing,
   onToggleEditing,
   onResetEdits,
   onConfigure,
   onCommitDayPlan,
   onToggleTodoComplete,
-  onStartStudy,
+  onToggleStudy,
 }: TimelineProps) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -618,12 +621,13 @@ export function Timeline({
                   dayPlan={dayPlan}
                   sessions={sessions}
                   subjects={subjects}
+                  activeStudy={activeStudy}
                   isEditing={isEditing}
                   drag={drag}
                   onPointerMove={onPointerMove}
                   onPointerUp={commitDrag}
                   onToggleComplete={toggleTodoComplete}
-                  onStartStudy={onStartStudy}
+                  onToggleStudy={onToggleStudy}
                   onStartReorder={(todoId, event) => {
                     if (!isEditing) return
                     const fromIndex = dayPlan.todoQueue.findIndex((todo) => todo.id === todoId)
@@ -787,12 +791,13 @@ function PlanBlock({
   dayPlan,
   sessions,
   subjects,
+  activeStudy,
   isEditing,
   drag,
   onPointerMove,
   onPointerUp,
   onToggleComplete,
-  onStartStudy,
+  onToggleStudy,
   onStartReorder,
   onStartShift,
   onStartResize,
@@ -805,12 +810,13 @@ function PlanBlock({
   dayPlan: DayPlanState
   sessions: StudySession[]
   subjects: Subject[]
+  activeStudy: ActiveStudy | null
   isEditing: boolean
   drag: DragState | null
   onPointerMove: (event: ReactPointerEvent) => void
   onPointerUp: () => void
   onToggleComplete: (item: PlannedTodoItem, completed: boolean) => void
-  onStartStudy: (item: PlannedTodoItem) => void
+  onToggleStudy: (item: PlannedTodoItem) => void
   onStartReorder: (todoId: string, event: ReactPointerEvent) => void
   onStartShift: (activityId: string, startMin: number, event: ReactPointerEvent) => void
   onStartResize: (target: 'todo' | 'activity' | 'break', id: string, baseDuration: number, event: ReactPointerEvent) => void
@@ -828,6 +834,14 @@ function PlanBlock({
     !!todoItem &&
     !!subject &&
     todoItem.categories.every((category) => getProgress(subject, todoItem.week, category) === 'completed')
+  const isActiveTodo =
+    !!todoItem &&
+    activeStudy !== null &&
+    activeStudy.subjectId === todoItem.subjectId &&
+    activeStudy.week === todoItem.week &&
+    activeStudy.categories.length === todoItem.categories.length &&
+    activeStudy.categories.every((category, index) => category === todoItem.categories[index])
+  const isRunningTodo = isActiveTodo && activeStudy.resumedAt !== null
   const canAdjustEnd =
     block.kind === 'todo' &&
     !!todoItem &&
@@ -973,11 +987,14 @@ function PlanBlock({
           </button>
           <button
             type="button"
-            aria-label="Start study timer"
+            aria-label={isRunningTodo ? 'Pause study timer' : isActiveTodo ? 'Resume study timer' : 'Start study timer'}
+            aria-pressed={isRunningTodo}
             className={cn(controlClass, 'border-zinc-200 bg-white text-zinc-600 hover:text-zinc-900')}
-            onClick={() => onStartStudy(todoItem)}
+            onClick={() => onToggleStudy(todoItem)}
           >
-            <Play className="size-4 fill-current" />
+            {isRunningTodo
+              ? <Pause className="size-4 fill-current" />
+              : <Play className="size-4 fill-current" />}
           </button>
         </div>
       )}
