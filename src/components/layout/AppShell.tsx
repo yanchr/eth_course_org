@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { CalendarClock, Plus, Settings as SettingsIcon, Timer } from 'lucide-react'
-import type { Subject } from '../../types'
+import type { Settings, Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
 import { useFitsWeekCalendar, useIsDesktop } from '../../hooks/useMediaQuery'
 import { currentWeek, formatWeekRange, parseISODate, rawWeekIndex } from '../../lib/semester'
@@ -54,7 +54,17 @@ export function AppShell() {
     return () => observer.disconnect()
   }, [])
 
-  const [selectedWeek, setSelectedWeek] = useState(todayWeek)
+  const [weekSelection, setWeekSelection] = useState<{
+    week: number
+    settings: Settings
+    todayWeek: number
+  } | null>(null)
+  const setSelectedWeek = (week: number) => setWeekSelection({ week, settings, todayWeek })
+  // Imports replace settings, so an earlier manual selection cannot pin the view.
+  const selectedWeek =
+    weekSelection?.settings === settings && weekSelection.todayWeek === todayWeek
+      ? weekSelection.week
+      : todayWeek
   const [tab, setTab] = useState<MobileTab>('week')
   const [detail, setDetail] = useState<{ id: string; slotId?: string } | null>(null)
   const [editing, setEditing] = useState<EditorTarget | null>(null)

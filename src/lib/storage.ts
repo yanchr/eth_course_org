@@ -5,10 +5,8 @@ import {
   type ActiveStudy,
   type BlockAnchor,
   type ActivityColor,
-  type ActivityOverride,
   type ActivityPreset,
   type DayPlanState,
-  type PlannedTodoItem,
   type PlannerData,
   type ProgressState,
   type ScheduleSlot,
@@ -262,123 +260,6 @@ function parseActivityPreset(raw: unknown): ActivityPreset | null {
   }
 }
 
-function parsePlannedTodo(raw: unknown): PlannedTodoItem | null {
-  if (!isObject(raw)) return null
-  const subjectId = str(raw.subjectId)
-  const categories = stringList(raw.categories)
-  if (!subjectId || !isWeek(raw.week) || categories.length === 0) return null
-  const custom =
-    typeof raw.customDurationMinutes === 'number' &&
-    Number.isFinite(raw.customDurationMinutes) &&
-    raw.customDurationMinutes > 0
-      ? Math.round(raw.customDurationMinutes)
-      : undefined
-  const snappedStart =
-    typeof raw.snappedStartMinute === 'number' && Number.isFinite(raw.snappedStartMinute)
-      ? Math.max(0, Math.min(1440, Math.round(raw.snappedStartMinute)))
-      : undefined
-  const snappedEnd =
-    typeof raw.snappedEndMinute === 'number' && Number.isFinite(raw.snappedEndMinute)
-      ? Math.max(0, Math.min(1440, Math.round(raw.snappedEndMinute)))
-      : undefined
-  return {
-    id: str(raw.id) || createId(),
-    subjectId,
-    week: raw.week,
-    categories,
-    sdMultiplier:
-      typeof raw.sdMultiplier === 'number' && Number.isFinite(raw.sdMultiplier)
-        ? Math.max(0, raw.sdMultiplier)
-        : raw.includeSdBuffer === false
-          ? 0
-          : 1,
-    breakStyle: raw.breakStyle === 'lecture' ? 'lecture' : 'standard',
-    anchor: parseAnchor(raw.anchor) ?? { type: 'flow' },
-    ...(custom !== undefined ? { customDurationMinutes: custom } : {}),
-    ...(snappedStart !== undefined && snappedEnd !== undefined && snappedEnd > snappedStart
-      ? { snappedStartMinute: snappedStart, snappedEndMinute: snappedEnd }
-      : {}),
-  }
-}
-
-function parseBreakOverrides(raw: unknown): Record<string, number> | undefined {
-  if (!isObject(raw)) return undefined
-  const out: Record<string, number> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) out[key] = Math.round(value)
-  }
-  return Object.keys(out).length ? out : undefined
-}
-
-function parseActivityOverrides(raw: unknown): Record<string, ActivityOverride> | undefined {
-  if (!isObject(raw)) return undefined
-  const out: Record<string, ActivityOverride> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (!isObject(value)) continue
-    const override: ActivityOverride = {}
-    if (
-      typeof value.durationMinutes === 'number' &&
-      Number.isFinite(value.durationMinutes) &&
-      value.durationMinutes > 0
-    ) {
-      override.durationMinutes = Math.round(value.durationMinutes)
-    }
-    const time = str(value.time)
-    if (HHMM.test(time)) override.time = time
-    const anchor = parseAnchor(value.anchor)
-    if (anchor) override.anchor = anchor
-    if (override.durationMinutes !== undefined || override.time !== undefined || override.anchor !== undefined) {
-      out[key] = override
-    }
-  }
-  return Object.keys(out).length ? out : undefined
-}
-
-function parseDayPlan(raw: unknown, presets: ActivityPreset[]): DayPlanState {
-  const defaults = createDefaultDayPlan(presets)
-  if (!isObject(raw)) return defaults
-  const date = str(raw.date)
-  const dayStartTime = str(raw.dayStartTime)
-  const selectedPresetIds = Array.isArray(raw.selectedPresetIds)
-    ? [...new Set(raw.selectedPresetIds.filter((id): id is string => typeof id === 'string' && id !== ''))]
-    : defaults.selectedPresetIds
-  const customActivities = Array.isArray(raw.customActivities)
-    ? raw.customActivities.map(parseActivityPreset).filter((a) => a !== null)
-    : []
-  const todoQueue = Array.isArray(raw.todoQueue)
-    ? raw.todoQueue.map(parsePlannedTodo).filter((t) => t !== null)
-    : []
-  const breakOverrides = parseBreakOverrides(raw.breakOverrides)
-  const activityOverrides = parseActivityOverrides(raw.activityOverrides)
-  const settingsBaselineOrder = Array.isArray(raw.settingsBaselineOrder)
-    ? raw.settingsBaselineOrder.filter((id): id is string => typeof id === 'string')
-    : todoQueue.map((todo) => todo.id)
-  const settingsBaselineSelectedPresetIds = Array.isArray(raw.settingsBaselineSelectedPresetIds)
-    ? raw.settingsBaselineSelectedPresetIds.filter((id): id is string => typeof id === 'string')
-    : selectedPresetIds
-  const settingsBaselineCustomActivities = Array.isArray(raw.settingsBaselineCustomActivities)
-    ? raw.settingsBaselineCustomActivities.map(parseActivityPreset).filter((activity) => activity !== null)
-    : customActivities
-  const settingsBaselineActivityOverrides = parseActivityOverrides(raw.settingsBaselineActivityOverrides)
-  return {
-    date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : defaults.date,
-    dayStartTime: HHMM.test(dayStartTime) ? dayStartTime : defaults.dayStartTime,
-    minBreakTailMinutes:
-      typeof raw.minBreakTailMinutes === 'number' && Number.isFinite(raw.minBreakTailMinutes)
-        ? Math.max(0, Math.round(raw.minBreakTailMinutes))
-        : 30,
-    selectedPresetIds,
-    customActivities,
-    todoQueue,
-    settingsBaselineOrder,
-    settingsBaselineSelectedPresetIds,
-    settingsBaselineCustomActivities,
-    ...(breakOverrides ? { breakOverrides } : {}),
-    ...(activityOverrides ? { activityOverrides } : {}),
-    ...(settingsBaselineActivityOverrides ? { settingsBaselineActivityOverrides } : {}),
-  }
-}
-
 /** Validates an unknown blob into PlannerData, or returns null if it isn't one. */
 export function parsePlannerData(raw: unknown): PlannerData | null {
   if (!isObject(raw) || !Array.isArray(raw.subjects)) return null
@@ -389,16 +270,9 @@ export function parsePlannerData(raw: unknown): PlannerData | null {
     ? raw.activityPresets.map(parseActivityPreset).filter((a) => a !== null)
     : defaults.activityPresets
   const presets = activityPresets.length > 0 ? activityPresets : defaults.activityPresets
-  const dayPlan = parseDayPlan(raw.dayPlan, presets)
-  const dayPlansByDate: Record<string, DayPlanState> = {}
-  if (isObject(raw.dayPlansByDate)) {
-    for (const [date, plan] of Object.entries(raw.dayPlansByDate)) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
-      dayPlansByDate[date] = { ...parseDayPlan(plan, presets), date }
-    }
-  }
-  dayPlansByDate[dayPlan.date] = dayPlan
-  const savedRolloverDate = str(raw.lastRolloverDate)
+  // Date selections and custom day plans belong only to this runtime session.
+  // Ignore legacy persisted plans as well as overrides in older JSON backups.
+  const dayPlan = createDefaultDayPlan(presets)
   return {
     version: 1,
     settings: {
@@ -411,11 +285,8 @@ export function parsePlannerData(raw: unknown): PlannerData | null {
       : [],
     activeStudy: parseActiveStudy(raw.activeStudy),
     activityPresets: presets,
-    lastRolloverDate:
-      /^\d{4}-\d{2}-\d{2}$/.test(savedRolloverDate)
-        ? savedRolloverDate
-        : toISODate(new Date()),
-    dayPlansByDate,
+    lastRolloverDate: dayPlan.date,
+    dayPlansByDate: { [dayPlan.date]: dayPlan },
     dayPlan,
   }
 }
@@ -430,9 +301,24 @@ export function loadData(): PlannerData {
   }
 }
 
+/** Shared persistence boundary for device storage and JSON backups. */
+export function persistentData(data: PlannerData): Omit<
+  PlannerData,
+  'dayPlan' | 'dayPlansByDate' | 'lastRolloverDate'
+> {
+  return {
+    version: data.version,
+    settings: data.settings,
+    subjects: data.subjects,
+    studySessions: data.studySessions,
+    activeStudy: data.activeStudy,
+    activityPresets: data.activityPresets,
+  }
+}
+
 export function saveData(data: PlannerData): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistentData(data)))
   } catch {
     // Quota exceeded or storage disabled; the in-memory state remains usable.
   }

@@ -101,7 +101,16 @@ export function PlannerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const flush = () => saveData(latest.current)
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) setData(loadData())
+      if (e.key === STORAGE_KEY) {
+        const saved = loadData()
+        setData((prev) => ({
+          ...saved,
+          // Other tabs sync durable data without changing this tab's day selection.
+          dayPlan: prev.dayPlan,
+          dayPlansByDate: prev.dayPlansByDate,
+          lastRolloverDate: prev.lastRolloverDate,
+        }))
+      }
     }
     window.addEventListener('pagehide', flush)
     window.addEventListener('storage', onStorage)
