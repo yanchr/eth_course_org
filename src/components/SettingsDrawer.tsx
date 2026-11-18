@@ -70,7 +70,7 @@ function SettingsBody({ onDone }: { onDone: () => void }) {
           <h3 className="text-sm font-semibold text-zinc-900">Data</h3>
           <p className="text-xs text-zinc-500">
             Courses, progress, study history, and activity presets are saved on this device. Export regularly
-            to keep a backup. Day plans last until you reload and are excluded from backups.
+            to keep a backup. Day plans are saved on this device and reset each new day; they are excluded from backups.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-2">

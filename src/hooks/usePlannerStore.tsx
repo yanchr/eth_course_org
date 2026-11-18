@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -23,11 +24,13 @@ import {
   createDefaultDayPlan,
   loadData,
   saveData,
+  rolloverDayPlan,
 } from '../lib/storage'
 import { progressKey } from '../lib/progress'
 import { activeElapsedMs } from '../lib/study'
 import { createId } from '../lib/id'
 import { toISODate } from '../lib/semester'
+import { subscribePlannerLifecycle } from '../lib/plannerLifecycle'
 
 /** Shorter sessions are treated as accidental taps and not logged. */
 const MIN_SESSION_MS = 1000
@@ -81,9 +84,6 @@ interface PlannerStore {
 
 const PlannerContext = createContext<PlannerStore | null>(null)
 
-const PERSIST_DELAY_MS = 250
-const ROLLOVER_CHECK_MS = 60_000
-
 function getTodayYYYYMMDD(): string {
   return toISODate(new Date())
 }
@@ -91,66 +91,25 @@ function getTodayYYYYMMDD(): string {
 export function PlannerProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<PlannerData>(loadData)
   const latest = useRef(data)
-  latest.current = data
 
-  useEffect(() => {
-    const handle = window.setTimeout(() => saveData(data), PERSIST_DELAY_MS)
-    return () => window.clearTimeout(handle)
+  // Save every committed change before paint, without a debounce that iOS can suspend.
+  useLayoutEffect(() => {
+    latest.current = data
+    saveData(data)
   }, [data])
 
   useEffect(() => {
-    const flush = () => saveData(latest.current)
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        const saved = loadData()
-        setData((prev) => ({
-          ...saved,
-          // Other tabs sync durable data without changing this tab's day selection.
-          dayPlan: prev.dayPlan,
-          dayPlansByDate: prev.dayPlansByDate,
-          lastRolloverDate: prev.lastRolloverDate,
-        }))
-      }
+      if (e.key === STORAGE_KEY) setData(loadData())
     }
-    window.addEventListener('pagehide', flush)
     window.addEventListener('storage', onStorage)
+    const unsubscribe = subscribePlannerLifecycle(
+      () => saveData(latest.current),
+      () => setData((prev) => rolloverDayPlan(prev)),
+    )
     return () => {
-      window.removeEventListener('pagehide', flush)
       window.removeEventListener('storage', onStorage)
-    }
-  }, [])
-
-  useEffect(() => {
-    const rolloverIfNeeded = () => {
-      const currentRealDate = getTodayYYYYMMDD()
-      setData((prev) => {
-        if (prev.lastRolloverDate === currentRealDate) return prev
-        const dayPlansByDate = {
-          ...prev.dayPlansByDate,
-          [prev.dayPlan.date]: prev.dayPlan,
-        }
-        const dayPlan =
-          dayPlansByDate[currentRealDate] ??
-          createDefaultDayPlan(prev.activityPresets, currentRealDate)
-        return {
-          ...prev,
-          lastRolloverDate: currentRealDate,
-          dayPlan,
-          dayPlansByDate: { ...dayPlansByDate, [currentRealDate]: dayPlan },
-        }
-      })
-    }
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') rolloverIfNeeded()
-    }
-    rolloverIfNeeded()
-    window.addEventListener('focus', rolloverIfNeeded)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    const interval = window.setInterval(rolloverIfNeeded, ROLLOVER_CHECK_MS)
-    return () => {
-      window.removeEventListener('focus', rolloverIfNeeded)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.clearInterval(interval)
+      unsubscribe()
     }
   }, [])
 

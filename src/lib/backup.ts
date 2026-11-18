@@ -1,9 +1,9 @@
 import type { PlannerData } from '../types'
-import { parsePlannerData, persistentData } from './storage'
+import { parsePlannerData, backupData } from './storage'
 import { toISODate } from './semester'
 
 export function exportData(data: PlannerData): void {
-  const payload = { ...persistentData(data), exportedAt: new Date().toISOString() }
+  const payload = { ...backupData(data), exportedAt: new Date().toISOString() }
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

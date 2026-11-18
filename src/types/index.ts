@@ -154,11 +154,11 @@ export interface PlannerData {
   studySessions: StudySession[]
   activeStudy: ActiveStudy | null
   activityPresets: ActivityPreset[]
-  /** Session-only date on which the last automatic day rollover ran. */
+  /** Local calendar date on which the last automatic day rollover ran. */
   lastRolloverDate: string
-  /** Session-only plans by local calendar date, including the active plan. */
+  /** Device-persisted plans by local calendar date, including the active plan. */
   dayPlansByDate?: Record<string, DayPlanState>
-  /** Session-only day selection and plan; excluded from storage and backups. */
+  /** Device-persisted day selection and plan; excluded from JSON backups. */
   dayPlan: DayPlanState
 }
 

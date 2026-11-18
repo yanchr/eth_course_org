@@ -34,7 +34,9 @@ export function TodoPicker({
 }: TodoPickerProps) {
   const tracked = useMemo(() => subjects.filter(isTracked), [subjects])
   const [subjectId, setSubjectId] = useState(tracked[0]?.id ?? '')
-  const [week, setWeek] = useState(defaultWeek)
+  const [weekSelection, setWeekSelection] = useState({ week: defaultWeek, defaultWeek })
+  const week = weekSelection.defaultWeek === defaultWeek ? weekSelection.week : defaultWeek
+  const setWeek = (week: number) => setWeekSelection({ week, defaultWeek })
   const [picked, setPicked] = useState<string[]>([])
   const [sdMultiplier, setSdMultiplier] = useState(1)
   const [breakStyle, setBreakStyle] = useState<'standard' | 'lecture'>('standard')

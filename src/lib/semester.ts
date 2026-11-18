@@ -46,8 +46,10 @@ export function formatDayDate(date: Date): string {
 /** 1-based week containing `today`; 0 before the semester, weekCount + 1 after it. */
 export function rawWeekIndex(startDate: string, weekCount: number, today = new Date()): number {
   const start = parseISODate(startDate)
-  const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  const diff = Math.floor((midnight.getTime() - start.getTime()) / MS_PER_DAY)
+  // Compare calendar dates, so a DST transition cannot delay Monday's week change.
+  const todayDay = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  const startDay = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())
+  const diff = Math.floor((todayDay - startDay) / MS_PER_DAY)
   if (diff < 0) return 0
   const week = Math.floor(diff / 7) + 1
   return week > weekCount ? weekCount + 1 : week
