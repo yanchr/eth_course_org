@@ -11,6 +11,9 @@ import {
   rolloverDayPlan,
 } from '../src/lib/storage'
 import { currentWeek, toISODate } from '../src/lib/semester'
+import { categoriesInWeek, createSubject, occursInWeek, slotsInWeek } from '../src/lib/subjects'
+import { weekStats, sortByWeekOutstanding } from '../src/lib/progress'
+import { importClassActivities } from '../src/lib/dayPlannerImport'
 import { subscribePlannerLifecycle } from '../src/lib/plannerLifecycle'
 
 const ephemeralKeys = ['dayPlan', 'dayPlansByDate', 'lastRolloverDate']
@@ -248,4 +251,118 @@ test('week boundaries use calendar dates across Zurich daylight saving changes',
     if (previousTZ === undefined) delete process.env.TZ
     else process.env.TZ = previousTZ
   }
+})
+
+
+test('W15 includes only previous-week todos and has no repeating classes', () => {
+  const subject = createSubject('Math')
+  subject.categories = ['Lecture', 'Quiz-1', 'Summary-1 ', 'Quiz-10', 'Quiz-1 extra']
+  subject.scheduleSlots = [{ id: 'lecture', type: 'lecture', day: 'Mon', time: '10:00-11:00', room: 'HG' }]
+  subject.events = [{ id: 'event', name: 'Exam', week: 14, slots: [], links: [] }]
+  assert.deepEqual(categoriesInWeek(subject, 14), [...subject.categories, 'Exam'])
+  assert.deepEqual(categoriesInWeek(subject, 15), ['Quiz-1', 'Summary-1 '])
+  assert.deepEqual(categoriesInWeek(subject, 16), [])
+  assert.equal(slotsInWeek(subject, 14).length, 1)
+  assert.deepEqual(slotsInWeek(subject, 15), [])
+  assert.deepEqual(importClassActivities([subject], '2026-12-21', '2026-09-14', 15), [])
+
+  const regular = { ...subject, id: 'regular', categories: ['Lecture'] }
+  const calendar = { ...subject, id: 'calendar', calendarOnly: true }
+  const oneOff = { ...subject, id: 'once', onceWeek: 14 }
+  assert.equal(occursInWeek(regular, 15), false)
+  assert.equal(occursInWeek(calendar, 15), false)
+  assert.equal(occursInWeek(oneOff, 15), false)
+  assert.deepEqual(sortByWeekOutstanding([regular, calendar, oneOff, subject], 15), [subject])
+  subject.progress['15-Quiz-1'] = 'completed'
+  assert.equal(weekStats(subject, 15).total, 2)
+  assert.equal(weekStats(subject, 15).completed, 1)
+  assert.equal(weekStats(subject, 14).completed, 0)
+})
+
+test('W15 todo plans and study records survive reopening and backup import', async () => {
+  const data = createDefaultData()
+  const subject = createSubject('Math')
+  subject.categories = ['Quiz-1']
+  subject.progress['15-Quiz-1'] = 'completed'
+  data.subjects = [subject]
+  data.dayPlan.todoQueue = [{ id: 'catch-up', subjectId: subject.id, week: 15, categories: ['Quiz-1'], sdMultiplier: 1, breakStyle: 'standard', anchor: { type: 'flow' } }]
+  data.studySessions = [{ id: 'session', subjectId: subject.id, week: 15, categories: ['Quiz-1'], durationMs: 60000, startedAt: '2026-12-21T10:00:00.000Z', endedAt: '2026-12-21T10:01:00.000Z' }]
+  const memory = new Map<string, string>()
+  const storage = { getItem: (key: string) => memory.get(key) ?? null, setItem: (key: string, value: string) => { memory.set(key, value) } }
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storage })
+  try {
+    saveData(data)
+    const reopened = loadData()
+    assert.deepEqual(reopened.dayPlan.todoQueue, data.dayPlan.todoQueue)
+    assert.deepEqual(reopened.studySessions, data.studySessions)
+  } finally {
+    if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage)
+    else Reflect.deleteProperty(globalThis, 'localStorage')
+  }
+  const imported = await readImportFile(new File([JSON.stringify(backupData(data))], 'backup.json'))
+  assert.deepEqual(imported.studySessions, data.studySessions)
+  assert.equal(imported.subjects[0].progress['15-Quiz-1'], 'completed')
+  assert.equal(imported.settings.weekCount, 14)
+})
+
+test('missing activity and todo anchors reset to flow, including saved Configure settings', async () => {
+  const { repairPlannerAnchors } = await import('../src/lib/dayPlannerAnchors')
+  const data = createDefaultData()
+  const target = { id: 'target', subjectId: 'math', week: 1, categories: ['Quiz'], sdMultiplier: 1, anchor: { type: 'flow' as const } }
+  data.dayPlan.todoQueue = [target, { ...target, id: 'dependent', anchor: { type: 'before', targetId: 'Lunch' } }]
+  data.dayPlan.customActivities = [{ id: 'custom', name: 'Custom', durationMinutes: 10, isDefault: false, anchor: { type: 'after', targetId: 'target' } }]
+  data.dayPlan.settingsBaselineCustomActivities = structuredClone(data.dayPlan.customActivities)
+  data.dayPlan.activityOverrides = { travel_to_uni: { durationMinutes: 45, anchor: { type: 'before', targetId: 'target' } } }
+  data.dayPlan.settingsBaselineActivityOverrides = structuredClone(data.dayPlan.activityOverrides)
+  const intact = repairPlannerAnchors(data)
+  assert.equal(intact.dayPlan.todoQueue[1].anchor.type, 'before')
+  assert.equal(intact.dayPlan.customActivities[0].anchor.type, 'after')
+  assert.equal(intact.dayPlan.activityOverrides?.travel_to_uni.anchor?.type, 'before')
+
+  data.dayPlan.todoQueue = data.dayPlan.todoQueue.filter((todo) => todo.id !== 'target')
+  data.activityPresets = data.activityPresets.filter((preset) => preset.id !== 'Lunch')
+  data.dayPlansByDate = { [data.dayPlan.date]: structuredClone(data.dayPlan) }
+  const repaired = repairPlannerAnchors(data)
+  for (const plan of [repaired.dayPlan, repaired.dayPlansByDate![data.dayPlan.date]]) {
+    assert.deepEqual(plan.todoQueue[0].anchor, { type: 'flow' })
+    assert.deepEqual(plan.customActivities[0].anchor, { type: 'flow' })
+    assert.deepEqual(plan.settingsBaselineCustomActivities[0].anchor, { type: 'flow' })
+    assert.deepEqual(plan.activityOverrides?.travel_to_uni, { durationMinutes: 45, anchor: { type: 'flow' } })
+    assert.deepEqual(plan.settingsBaselineActivityOverrides?.travel_to_uni.anchor, { type: 'flow' })
+    assert.deepEqual(plan.activityOverrides?.Sleeping.anchor, { type: 'flow' })
+    assert.deepEqual(plan.settingsBaselineActivityOverrides?.Sleeping.anchor, { type: 'flow' })
+  }
+  assert.deepEqual(repairPlannerAnchors(repaired), repaired)
+})
+
+test('deselecting an anchor target resets its dependents while fixed anchors stay fixed', async () => {
+  const { repairDayPlanAnchors } = await import('../src/lib/dayPlannerAnchors')
+  const data = createDefaultData()
+  data.dayPlan.selectedPresetIds = data.dayPlan.selectedPresetIds.filter((id) => id !== 'Lunch')
+  const repaired = repairDayPlanAnchors(data.dayPlan, data.activityPresets)
+  assert.deepEqual(repaired.activityOverrides?.Sleeping.anchor, { type: 'flow' })
+  assert.equal(repaired.settingsBaselineActivityOverrides?.Sleeping, undefined)
+  assert.equal(repaired.activityOverrides?.Lunch, undefined)
+  assert.equal(data.activityPresets.find((preset) => preset.id === 'Lunch')?.anchor.type, 'fixed')
+})
+
+test('numbered todos pool separate replicas within a course, summing split sessions first', async () => {
+  const { combinedTodoStats, todoTargetMinutes } = await import('../src/lib/dayPlannerMath')
+  const { taskAverages, taskAverageKey } = await import('../src/lib/study')
+  const session = (category: string, minutes: number, week = 1, subjectId = 'analysis') => ({
+    id: `${subjectId}-${week}-${category}-${minutes}`, subjectId, week, categories: [category],
+    durationMs: minutes * 60000, startedAt: '2026-11-20T10:00:00.000Z', endedAt: '2026-11-20T11:00:00.000Z',
+  })
+  const sessions = [session('Lecture', 10), session('Lecture', 20), session('Lecture2', 60), session('Lecture3', 90), session('Lecture', 120, 1, 'other'), session('Lecture-1', 300)]
+  const expected = { mean: 60, sd: 30, n: 3 }
+  for (const category of ['Lecture', 'Lecture2', 'Lecture3', 'Lecture4', 'Lecture 5']) {
+    assert.deepEqual(combinedTodoStats(sessions, 'analysis', [category]), expected)
+    assert.equal(taskAverages(sessions).get(taskAverageKey('analysis', category)), 60 * 60000)
+    assert.equal(todoTargetMinutes({ id: category, subjectId: 'analysis', week: 2, categories: [category], sdMultiplier: 1, anchor: { type: 'flow' } }, sessions), 90)
+  }
+  assert.equal(combinedTodoStats(sessions, 'analysis', ['Lecture-1']).mean, 300)
+  assert.equal(combinedTodoStats(sessions, 'other', ['Lecture2']).mean, 120)
+  assert.equal(combinedTodoStats(sessions, 'analysis', ['Lecture', 'Lecture2']).mean, 120)
+  assert.deepEqual(combinedTodoStats([], 'analysis', ['Lecture3']), { mean: 60, sd: 0, n: 0 })
 })

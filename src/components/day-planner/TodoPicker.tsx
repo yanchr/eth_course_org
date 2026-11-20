@@ -3,6 +3,8 @@ import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react'
 import { DAYS, type BlockAnchor, type Day, type PlannedTodoItem, type Subject } from '../../types'
 import { categoriesInWeek, isTracked } from '../../lib/subjects'
 import { combinedTodoStats, sdMultiplierLabel, todoLabel, todoTargetMinutes } from '../../lib/dayPlannerMath'
+import { getProgress } from '../../lib/progress'
+import { cn } from '../../lib/cn'
 import { createId } from '../../lib/id'
 import { Button } from '../ui/Button'
 import { Pill } from '../ui/Pill'
@@ -37,13 +39,14 @@ export function TodoPicker({
   const [weekSelection, setWeekSelection] = useState({ week: defaultWeek, defaultWeek })
   const week = weekSelection.defaultWeek === defaultWeek ? weekSelection.week : defaultWeek
   const setWeek = (week: number) => setWeekSelection({ week, defaultWeek })
-  const [picked, setPicked] = useState<string[]>([])
+  const [pickedCategories, setPicked] = useState<string[]>([])
   const [sdMultiplier, setSdMultiplier] = useState(1)
   const [breakStyle, setBreakStyle] = useState<'standard' | 'lecture'>('standard')
   const [anchor, setAnchor] = useState<BlockAnchor>({ type: 'flow' })
 
   const subject = tracked.find((s) => s.id === subjectId) ?? tracked[0] ?? null
   const cats = subject ? categoriesInWeek(subject, week) : []
+  const picked = pickedCategories.filter((category) => cats.includes(category))
 
   const toggleCat = (c: string) => {
     setPicked((prev) => {
@@ -154,11 +157,33 @@ export function TodoPicker({
 
       {cats.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {cats.map((c) => (
-            <Pill key={c} active={picked.includes(c)} className="h-11" onClick={() => toggleCat(c)}>
-              {c}
-            </Pill>
-          ))}
+          {cats.map((category) => {
+            const completed = subject != null && getProgress(subject, week, category) === 'completed'
+            const planned = todoQueue.some((item) =>
+              item.subjectId === subject?.id && item.week === week && item.categories.includes(category),
+            )
+            const status = completed ? 'Completed' : planned ? 'Planned' : 'Open'
+            return (
+              <Pill
+                key={category}
+                active={picked.includes(category)}
+                className="relative h-11 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2"
+                onClick={() => toggleCat(category)}
+                aria-label={`${category}, ${status.toLowerCase()}`}
+                title={`${category} · ${status}`}
+                data-status={status.toLowerCase()}
+              >
+                {category}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'pointer-events-none absolute inset-0 rounded-full border-[3px] transition-colors duration-150 ease-out',
+                    completed ? 'border-green-800' : planned ? 'border-orange-500' : 'border-white',
+                  )}
+                />
+              </Pill>
+            )
+          })}
         </div>
       )}
 
@@ -166,7 +191,7 @@ export function TodoPicker({
         <p className="text-xs text-zinc-500">
           Est. {Math.round(estimate.mean)}m
           {estimate.sd > 0 ? ` ± ${Math.round(estimate.sd)}m SD` : ''}
-          {estimate.n === 0 ? ' (baseline)' : estimate.n === 1 ? ' (1 week)' : ` (${estimate.n} weeks)`}
+          {estimate.n === 0 ? ' (baseline)' : estimate.n === 1 ? ' (1 replica)' : ` (${estimate.n} replicas)`}
         </p>
       )}
 

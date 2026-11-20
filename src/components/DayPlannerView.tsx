@@ -119,7 +119,7 @@ export function DayPlannerView() {
   } = usePlanner()
 
   const { dayPlan, activityPresets, studySessions } = data
-  const defaultWeek = currentWeek(settings.semesterStartDate, settings.weekCount)
+  const defaultWeek = currentWeek(settings.semesterStartDate, settings.weekCount + 1)
   const [isEditing, setIsEditing] = useState(false)
   const [configureOpen, setConfigureOpen] = useState(false)
 
@@ -294,7 +294,7 @@ export function DayPlannerView() {
           <div className="border-t border-zinc-100 pt-6">
             <TodoPicker
               subjects={subjects}
-              weekCount={settings.weekCount}
+              weekCount={settings.weekCount + 1}
               defaultWeek={defaultWeek}
               date={dayPlan.date}
               sessions={studySessions}
@@ -318,7 +318,7 @@ export function DayPlannerView() {
               dayPlan={dayPlan}
               subjects={subjects}
               semesterStartDate={settings.semesterStartDate}
-              weekCount={settings.weekCount}
+              weekCount={settings.weekCount + 1}
               onTogglePreset={togglePreset}
               onUpsertPreset={upsertActivityPreset}
               onDeletePreset={deleteActivityPreset}

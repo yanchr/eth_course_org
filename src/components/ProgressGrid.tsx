@@ -4,6 +4,7 @@ import type { Subject } from '../types'
 import { usePlanner } from '../hooks/usePlannerStore'
 import { getProgress, subjectStats } from '../lib/progress'
 import { formatWeekRange, weekRange } from '../lib/semester'
+import { categoriesInWeek } from '../lib/subjects'
 import { cn } from '../lib/cn'
 import { ProgressCell } from './ProgressCell'
 
@@ -19,7 +20,8 @@ const pad = (n: number) => String(n).padStart(2, '0')
 /** Subject x category rows by week columns: the digital version of the paper tracker. */
 export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubject }: ProgressGridProps) {
   const { subjects, settings, setProgress } = usePlanner()
-  const { semesterStartDate, weekCount } = settings
+  const { semesterStartDate, weekCount: teachingWeeks } = settings
+  const weekCount = teachingWeeks + 1
   const weeks = Array.from({ length: weekCount }, (_, i) => i + 1)
   const tableRef = useRef<HTMLTableElement>(null)
   const [focus, setFocus] = useState({ row: 0, col: selectedWeek - 1 })
@@ -190,7 +192,7 @@ export function ProgressGrid({ selectedWeek, todayWeek, onSelectWeek, onOpenSubj
                       </th>
                       {weeks.map((w) => {
                         const c = w - 1
-                        const applies = onlyWeek == null || onlyWeek === w
+                        const applies = (onlyWeek == null || onlyWeek === w) && categoriesInWeek(subject, w).includes(category)
                         return (
                           <td
                             key={w}

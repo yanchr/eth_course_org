@@ -90,7 +90,7 @@ function SessionBody({
   const changeDay = (day: string) => {
     setTimes((t) => ({ ...t, day }))
     const date = timeSpan(day, '00:00', '00:01')?.start
-    if (date) changeWeek(currentWeek(settings.semesterStartDate, settings.weekCount, date))
+    if (date) changeWeek(currentWeek(settings.semesterStartDate, settings.weekCount + 1, date))
   }
 
   const chooseSubject = (id: string) => {
@@ -182,7 +182,7 @@ function SessionBody({
           Week
         </label>
         <select id={weekId} value={week} onChange={(e) => changeWeek(Number(e.target.value))} className={inputClass}>
-          {Array.from({ length: settings.weekCount }, (_, i) => i + 1).map((w) => (
+          {Array.from({ length: settings.weekCount + 1 }, (_, i) => i + 1).map((w) => (
             <option key={w} value={w}>
               Week {w} · {formatWeekRange(settings.semesterStartDate, w)}
               {w === defaultWeek ? ' (current)' : ''}

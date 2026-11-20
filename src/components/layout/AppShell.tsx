@@ -35,7 +35,8 @@ export function AppShell() {
   const { subjects, settings, data, upsertSubject, deleteSubject } = usePlanner()
   const isDesktop = useIsDesktop()
   const weekCalendar = useFitsWeekCalendar()
-  const { semesterStartDate, weekCount } = settings
+  const { semesterStartDate, weekCount: teachingWeeks } = settings
+  const weekCount = teachingWeeks + 1
 
   const todayWeek = currentWeek(semesterStartDate, weekCount)
   const rawWeek = rawWeekIndex(semesterStartDate, weekCount)
@@ -84,7 +85,7 @@ export function AppShell() {
   const todayDone = completedTodayCount(subjects)
 
   const status = inSemester
-    ? `Week ${todayWeek} of ${weekCount}`
+    ? todayWeek > teachingWeeks ? `Week ${todayWeek} · Catch-up` : `Week ${todayWeek} of ${teachingWeeks}`
     : rawWeek < 1
       ? 'Semester not started'
       : 'Semester ended'

@@ -79,7 +79,7 @@ export function SubjectList({ todayWeek, onOpen, onAdd, onAddEvent, onAddCalenda
                 </div>
                 {!calendar && (
                 <div className="flex w-full gap-1" aria-hidden="true">
-                  {Array.from({ length: settings.weekCount }, (_, i) => {
+                  {Array.from({ length: settings.weekCount + 1 }, (_, i) => {
                     const week = i + 1
                     if (subject.onceWeek != null && subject.onceWeek !== week) {
                       return <span key={i} className="h-1.5 flex-1 rounded-full bg-zinc-100" />

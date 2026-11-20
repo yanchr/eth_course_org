@@ -1,9 +1,10 @@
 import type { PlannedTodoItem, StudySession } from '../types'
+import { todoFamily } from './todoFamilies'
 
 export interface MeanSd {
   mean: number
   sd: number
-  /** Number of weekly samples used for the combined todo (before fallback). */
+  /** Number of recorded todo replicas used for the estimate (before fallback). */
   n: number
 }
 
@@ -54,7 +55,7 @@ function categoryStats(
   const values: number[] = []
   for (const [key, minutes] of map) {
     const [sid, , loggedCategory] = key.split('\0')
-    if (sid === subjectId && loggedCategory === category && minutes > 0) values.push(minutes)
+    if (sid === subjectId && todoFamily(loggedCategory) === todoFamily(category) && minutes > 0) values.push(minutes)
   }
   if (values.length >= 2) return sampleMeanSd(values)
   if (values.length === 1) return { mean: values[0], sd: global.sd, n: 1 }
@@ -63,7 +64,8 @@ function categoryStats(
 
 /**
  * Means are additive per category, even when categories were logged in disjoint weeks.
- * SD uses paired complete weeks when possible and per-category fallback otherwise.
+ * Numbered variants are pooled as separate replicas, after summing sessions per todo.
+ * SD uses paired complete weeks for distinct categories and pooled fallback otherwise.
  */
 export function combinedTodoStats(
   sessions: StudySession[],
@@ -76,6 +78,7 @@ export function combinedTodoStats(
   const map = buildCategoryWeekMinutes(sessions)
   const global = globalBaseline(sessions)
   const individual = categories.map((category) => categoryStats(map, global, subjectId, category))
+  if (C === 1) return individual[0]
   const mean = individual.reduce((sum, stats) => sum + stats.mean, 0)
 
   const subjectWeeks = new Set<number>()
@@ -89,7 +92,13 @@ export function combinedTodoStats(
       ? [values.reduce((sum, minutes) => sum + minutes, 0)]
       : []
   })
-  if (pairedTotals.length >= 2) {
+  const pooled = [...map.keys()].some((key) => {
+    const [sid, , loggedCategory] = key.split('\0')
+    return sid === subjectId && categories.some((category) =>
+      loggedCategory !== category && todoFamily(loggedCategory) === todoFamily(category),
+    )
+  })
+  if (!pooled && pairedTotals.length >= 2) {
     return { mean, sd: sampleMeanSd(pairedTotals).sd, n: pairedTotals.length }
   }
 

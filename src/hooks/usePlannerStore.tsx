@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type SetStateAction,
 } from 'react'
 import type {
   ActivityPreset,
@@ -30,6 +31,7 @@ import { progressKey } from '../lib/progress'
 import { activeElapsedMs } from '../lib/study'
 import { createId } from '../lib/id'
 import { toISODate } from '../lib/semester'
+import { repairPlannerAnchors } from '../lib/dayPlannerAnchors'
 import { subscribePlannerLifecycle } from '../lib/plannerLifecycle'
 
 /** Shorter sessions are treated as accidental taps and not logged. */
@@ -89,7 +91,10 @@ function getTodayYYYYMMDD(): string {
 }
 
 export function PlannerProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<PlannerData>(loadData)
+  const [data, setRawData] = useState<PlannerData>(() => repairPlannerAnchors(loadData()))
+  const setData = useCallback((update: SetStateAction<PlannerData>) => {
+    setRawData((previous) => repairPlannerAnchors(typeof update === 'function' ? update(previous) : update))
+  }, [])
   const latest = useRef(data)
 
   // Save every committed change before paint, without a debounce that iOS can suspend.

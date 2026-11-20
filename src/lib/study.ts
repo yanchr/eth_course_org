@@ -1,4 +1,5 @@
 import type { ActiveStudy, StudySession } from '../types'
+import { todoFamily } from './todoFamilies'
 
 export function activeElapsedMs(active: ActiveStudy, now = Date.now()): number {
   return active.accumulatedMs + (active.resumedAt === null ? 0 : Math.max(0, now - active.resumedAt))
@@ -92,10 +93,10 @@ export function studyStats(sessions: StudySession[]): StudyStats {
 }
 
 export function taskAverageKey(subjectId: string, category: string): string {
-  return `${subjectId}\0${category}`
+  return `${subjectId}\0${todoFamily(category)}`
 }
 
-/** Mean recorded time for each todo, over the weeks that have time logged for it. */
+/** Mean recorded time per todo replica, pooling numbered variants within each course. */
 export function taskAverages(sessions: StudySession[]): Map<string, number> {
   const grouped = new Map<string, { sum: number; weeks: number }>()
   for (const task of studyStats(sessions).tasks) {

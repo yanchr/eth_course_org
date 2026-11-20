@@ -1,8 +1,21 @@
-import { DEFAULT_CATEGORIES, type ScheduleSlot, type Subject, type SubjectEvent } from '../types'
+import { DEFAULT_CATEGORIES, WEEK_COUNT, type ScheduleSlot, type Subject, type SubjectEvent } from '../types'
 import { createId } from './id'
 
+/** A trailing -1 means this todo covers the preceding teaching week. */
+export function isPreviousWeekTodo(name: string): boolean {
+  return name.trimEnd().endsWith('-1')
+}
+
 export function occursInWeek(subject: Subject, week: number): boolean {
-  return subject.onceWeek == null || subject.onceWeek === week
+  if (week < 1 || week > WEEK_COUNT + 1) return false
+  if (subject.onceWeek != null && subject.onceWeek !== week) return false
+  if (week === WEEK_COUNT + 1) {
+    return isTracked(subject) && (
+      subject.categories.some(isPreviousWeekTodo) ||
+      (subject.events ?? []).some((event) => event.week === week && isPreviousWeekTodo(event.name))
+    )
+  }
+  return true
 }
 
 export function isOnce(subject: Subject): boolean {
@@ -26,12 +39,12 @@ export function categoriesInWeek(subject: Subject, week: number): string[] {
     if (names.some((c) => c.toLowerCase() === event.name.toLowerCase())) continue
     names.push(event.name)
   }
-  return names
+  return week === WEEK_COUNT + 1 ? names.filter(isPreviousWeekTodo) : names
 }
 
 /** Repeating slots, plus slots from single events in this week. */
 export function slotsInWeek(subject: Subject, week: number): ScheduleSlot[] {
-  if (!occursInWeek(subject, week)) return []
+  if (week > WEEK_COUNT || !occursInWeek(subject, week)) return []
   return [
     ...subject.scheduleSlots,
     ...(subject.events ?? []).filter((event) => event.week === week).flatMap((event) => event.slots),

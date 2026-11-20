@@ -83,7 +83,8 @@ function weekFromPager(el: HTMLElement, weekCount: number): number {
 
 export function WeeklyTimetable({ week, onOpen, daysVisible = 7, onWeekChange }: WeeklyTimetableProps) {
   const { subjects, settings } = usePlanner()
-  const { weekCount, semesterStartDate } = settings
+  const { weekCount: teachingWeeks, semesterStartDate } = settings
+  const weekCount = teachingWeeks + 1
   const pager = daysVisible === 2
   const scrollerRef = useRef<HTMLDivElement>(null)
   const headerScrollRef = useRef<HTMLDivElement>(null)

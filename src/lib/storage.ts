@@ -101,7 +101,7 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback)
 const PROGRESS_STATES: ProgressState[] = ['pending', 'completed', 'canceled']
 const isWeek = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= WEEK_COUNT
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= WEEK_COUNT + 1
 
 function parseLink(raw: unknown): SubjectLink | null {
   if (!isObject(raw)) return null
