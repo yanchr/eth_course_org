@@ -356,7 +356,7 @@ test('numbered todos pool separate replicas within a course, summing split sessi
   })
   const sessions = [session('Lecture', 10), session('Lecture', 20), session('Lecture2', 60), session('Lecture3', 90), session('Lecture', 120, 1, 'other'), session('Lecture-1', 300)]
   const expected = { mean: 60, sd: 30, n: 3 }
-  for (const category of ['Lecture', 'Lecture2', 'Lecture3', 'Lecture4', 'Lecture 5']) {
+  for (const category of ['Lecture', 'Lecture2', 'Lecture3', 'Lecture4', 'Lecture 5', 'Lecture_2']) {
     assert.deepEqual(combinedTodoStats(sessions, 'analysis', [category]), expected)
     assert.equal(taskAverages(sessions).get(taskAverageKey('analysis', category)), 60 * 60000)
     assert.equal(todoTargetMinutes({ id: category, subjectId: 'analysis', week: 2, categories: [category], sdMultiplier: 1, anchor: { type: 'flow' } }, sessions), 90)
@@ -365,4 +365,35 @@ test('numbered todos pool separate replicas within a course, summing split sessi
   assert.equal(combinedTodoStats(sessions, 'other', ['Lecture2']).mean, 120)
   assert.equal(combinedTodoStats(sessions, 'analysis', ['Lecture', 'Lecture2']).mean, 120)
   assert.deepEqual(combinedTodoStats([], 'analysis', ['Lecture3']), { mean: 60, sd: 0, n: 0 })
+})
+
+
+test('numbered replicas can also carry a previous-week suffix', async () => {
+  const { todoFamily } = await import('../src/lib/todoFamilies')
+  const { combinedTodoStats } = await import('../src/lib/dayPlannerMath')
+  const { taskAverages, taskAverageKey } = await import('../src/lib/study')
+  for (const category of ['Lecture-1', 'Lecture_2-1', 'Lecture2-1', 'Lecture 3-1']) {
+    assert.equal(todoFamily(category), 'lecture-1')
+  }
+  assert.equal(todoFamily('Lecture_2'), 'lecture')
+  const subject = createSubject('Analysis')
+  subject.categories = ['Lecture', 'Lecture-1', 'Lecture_2-1']
+  assert.deepEqual(categoriesInWeek(subject, 15), ['Lecture-1', 'Lecture_2-1'])
+  subject.progress['15-Lecture-1'] = 'completed'
+  assert.equal(weekStats(subject, 15).completed, 1)
+  assert.equal(weekStats(subject, 15).total, 2)
+
+  const sessions = ['Lecture-1', 'Lecture_2-1', 'Lecture'].map((category, index) => ({
+    id: category, subjectId: subject.id, week: 14, categories: [category],
+    durationMs: [30, 90, 300][index] * 60000,
+    startedAt: '2026-11-20T10:00:00.000Z', endedAt: '2026-11-20T11:00:00.000Z',
+  }))
+  for (const category of ['Lecture-1', 'Lecture_2-1', 'Lecture3-1']) {
+    const stats = combinedTodoStats(sessions, subject.id, [category])
+    assert.equal(stats.mean, 60)
+    assert.equal(stats.sd, Math.sqrt(1800))
+    assert.equal(stats.n, 2)
+    assert.equal(taskAverages(sessions).get(taskAverageKey(subject.id, category)), 60 * 60000)
+  }
+  assert.equal(combinedTodoStats(sessions, subject.id, ['Lecture']).mean, 300)
 })
