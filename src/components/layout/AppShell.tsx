@@ -4,8 +4,8 @@ import type { Settings, Subject } from '../../types'
 import { usePlanner } from '../../hooks/usePlannerStore'
 import { useFitsWeekCalendar, useIsDesktop } from '../../hooks/useMediaQuery'
 import { currentWeek, formatWeekRange, parseISODate, rawWeekIndex } from '../../lib/semester'
-import { completedTodayCount, sortByWeekOutstanding, weekCompletions } from '../../lib/progress'
-import { activeElapsedMs, formatClock, formatDuration, studiedTodayMs } from '../../lib/study'
+import { sortByWeekOutstanding, weekCompletions } from '../../lib/progress'
+import { activeElapsedMs, formatClock } from '../../lib/study'
 import { useNow } from '../../hooks/useNow'
 import { cn } from '../../lib/cn'
 import { Button } from '../ui/Button'
@@ -24,6 +24,7 @@ import { StudyView } from '../StudyView'
 import { DayPlannerView } from '../DayPlannerView'
 import { BottomNav, type MobileTab } from './BottomNav'
 import { ClearCelebration } from '../ClearCelebration'
+import { HeaderStats } from './HeaderStats'
 
 function semesterLabel(startDate: string): string {
   const d = parseISODate(startDate)
@@ -79,10 +80,6 @@ export function AppShell() {
   const hasSubjects = subjects.length > 0
   const studying = tab === 'study'
   const planning = tab === 'plan'
-  const activeRunning = data.activeStudy?.resumedAt != null
-  const now = useNow(!!data.activeStudy && activeRunning)
-  const todayStudyMs = studiedTodayMs(data.studySessions, data.activeStudy, now)
-  const todayDone = completedTodayCount(subjects)
 
   const status = inSemester
     ? todayWeek > teachingWeeks ? `Week ${todayWeek} · Catch-up` : `Week ${todayWeek} of ${teachingWeeks}`
@@ -96,7 +93,7 @@ export function AppShell() {
     .slice(0, dueThroughWeek)
     .reduce((sum, w) => sum + w.scheduled - w.completed, 0)
   const openThisWeek = dueThroughWeek > 0 ? completion[dueThroughWeek - 1].scheduled - completion[dueThroughWeek - 1].completed : 0
-  const carriedOver = open - openThisWeek
+  const totalOpen = completion.reduce((sum, w) => sum + w.scheduled - w.completed, 0)
 
   const [clearedWeek, setClearedWeek] = useState<number | null>(null)
   const [seenOpen, setSeenOpen] = useState<number | null>(null)
@@ -133,31 +130,7 @@ export function AppShell() {
           </p>
         </div>
         {hasSubjects && dueThroughWeek > 0 && (
-          <span
-            className={cn(
-              'tabular flex shrink-0 flex-col items-center rounded-full px-2.5 py-1 text-xs leading-tight font-semibold',
-              'transition-colors duration-150 ease-out',
-              'rounded-2xl',
-              open > 0 ? 'bg-zinc-100 text-zinc-700' : 'bg-emerald-500/10 text-emerald-700',
-            )}
-            aria-label={[
-              open > 0
-                ? `${open} item${open === 1 ? '' : 's'} still to do by the end of week ${dueThroughWeek}`
-                : `Nothing left to do through week ${dueThroughWeek}`,
-              `${todayDone} finished today`,
-              `${formatDuration(todayStudyMs)} studied today`,
-            ].join('. ')}
-            title={
-              carriedOver > 0
-                ? `${openThisWeek} open this week · ${carriedOver} from earlier weeks · ${todayDone} done today · ${formatDuration(todayStudyMs)} studied`
-                : `${openThisWeek} open this week · ${todayDone} done today · ${formatDuration(todayStudyMs)} studied`
-            }
-          >
-            <span>{open > 0 ? `${open} to do` : 'All done'}</span>
-            <span className="text-[10px] font-medium opacity-70">
-              {todayDone} done · {formatDuration(todayStudyMs)}
-            </span>
-          </span>
+          <HeaderStats open={open} openThisWeek={openThisWeek} totalOpen={totalOpen} dueThroughWeek={dueThroughWeek} />
         )}
         {hasSubjects && data.activeStudy && !studying && (
           <StudyChip onOpen={() => setTab('study')} />

@@ -12,11 +12,56 @@ import {
 } from '../src/lib/storage'
 import { currentWeek, toISODate } from '../src/lib/semester'
 import { categoriesInWeek, createSubject, occursInWeek, slotsInWeek } from '../src/lib/subjects'
-import { weekStats, sortByWeekOutstanding } from '../src/lib/progress'
+import { completedTodayCount, dailyTodoTarget, weekCompletions, weekStats, sortByWeekOutstanding } from '../src/lib/progress'
+import { studyStats } from '../src/lib/study'
 import { importClassActivities } from '../src/lib/dayPlannerImport'
 import { subscribePlannerLifecycle } from '../src/lib/plannerLifecycle'
 
 const ephemeralKeys = ['dayPlan', 'dayPlansByDate', 'lastRolloverDate']
+
+test('daily pace includes today and stays stable as start-of-day work is completed', () => {
+  for (let day = 0; day < 7; day++) {
+    const now = new Date(2026, 10, 23 + day, 12).getTime()
+    assert.equal(dailyTodoTarget(114, 0, now), 114 / (7 - day))
+    assert.equal(dailyTodoTarget(110, 4, now), 114 / (7 - day))
+    assert.equal(dailyTodoTarget(0, 0, now), 0)
+  }
+  const sunday = new Date(2026, 10, 29, 23, 59).getTime()
+  const monday = new Date(2026, 10, 30, 0, 0).getTime()
+  assert.equal(dailyTodoTarget(14, 0, sunday), 14)
+  assert.equal(dailyTodoTarget(14, 0, monday), 2)
+})
+
+test('header counts include future and catch-up work but exclude canceled and completed work', () => {
+  const subject = createSubject('Math')
+  subject.categories = ['Lecture', 'Quiz-1']
+  subject.progress = { '1-Lecture': 'completed', '2-Quiz-1': 'canceled' }
+  const now = new Date(2026, 10, 23, 12).getTime()
+  subject.completedAt = { '1-Lecture': new Date(now).toISOString() }
+  const completion = weekCompletions([subject], 15)
+  assert.equal(completion.slice(0, 11).reduce((sum, week) => sum + week.scheduled - week.completed, 0), 20)
+  assert.equal(completion.reduce((sum, week) => sum + week.scheduled - week.completed, 0), 27)
+  assert.equal(completedTodayCount([subject], now), 1)
+  assert.equal(dailyTodoTarget(20, completedTodayCount([subject], now), now), 3)
+})
+
+test('average to-do time sums split sessions and splits shared sessions before averaging', () => {
+  const session = (minutes: number, categories = ['Lecture'], week = 1, subjectId = 'math') => ({
+    id: `${minutes}-${week}-${subjectId}`, subjectId, week, categories,
+    durationMs: minutes * 60000,
+    startedAt: '2026-11-20T10:00:00.000Z', endedAt: '2026-11-20T12:00:00.000Z',
+  })
+  const stats = studyStats([
+    session(10), session(20), // One 30-minute to-do, not two samples.
+    session(90, ['Lecture', 'Quiz']), // Two 45-minute to-dos; Lecture now totals 75.
+    session(60, ['Lecture'], 2), // A separate week is a separate to-do.
+    session(100, ['Lecture'], 1, 'physics'), // A separate course is a separate to-do.
+    session(300, []), // Course-only time must not affect the to-do average.
+  ])
+  assert.equal(stats.tasks.length, 4)
+  assert.equal(stats.avgPerTaskMs, 70 * 60000)
+  assert.equal(studyStats([]).tasks.length, 0)
+})
 
 function staleData() {
   const data = createDefaultData()

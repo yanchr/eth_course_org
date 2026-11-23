@@ -59,6 +59,12 @@ export function completedTodayCount(subjects: Subject[], now = Date.now()): numb
   return count
 }
 
+/** Start-of-day workload spread over the remaining Monday–Sunday days, including today. */
+export function dailyTodoTarget(open: number, todayDone: number, now = Date.now()): number {
+  const daysLeft = 7 - ((new Date(now).getDay() + 6) % 7)
+  return (open + todayDone) / daysLeft
+}
+
 export function getProgress(subject: Subject, week: number, category: string): ProgressState {
   return subject.progress[progressKey(week, category)] ?? 'pending'
 }
